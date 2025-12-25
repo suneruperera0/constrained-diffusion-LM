@@ -1,0 +1,36 @@
+# ConstrainedDiffusionLM Evaluation Configuration
+
+checkpoint: null
+
+sampling:
+  timesteps: null
+  temperature: 1.0
+  top_k: null
+  top_p: null
+
+generation:
+  num_samples: 10
+  max_len: 128
+  batch_size: 8
+
+editing:
+  examples:
+    - text: "The contract is governed by Ontario law."
+      lock_spans: [[5, 8]]
+      prompt: "Make it more formal"
+    - text: "Please review the document."
+      lock_spans: [[1, 3]]
+      prompt: "Make it urgent"
+
+metrics:
+  compute_constraint_fidelity: true
+  compute_edit_locality: true
+  compute_perplexity: false
+
+output:
+  save_samples: true
+  output_dir: "outputs"
+  format: "jsonl"
+
+device: "auto"
+seed: null
