@@ -2,6 +2,10 @@
 Reverse diffusion sampler for generation and editing.
 
 The sampler iteratively denoises from x_T (fully masked) to x_0 (clean text).
+
+This module supports:
+- DiffusionSampler: Unconditional generation
+- ConstrainedDiffusionSampler: Editing with locked tokens preserved
 """
 
 from typing import Optional, Callable, List, Tuple
@@ -168,6 +172,181 @@ class DiffusionSampler:
         )
         
         return final, trajectory
+
+
+class ConstrainedDiffusionSampler(DiffusionSampler):
+    """
+    Constraint-preserving sampler for text editing.
+    
+    Key properties:
+    1. Starts from original text (not all masks)
+    2. Only editable positions are initially masked
+    3. Locked tokens are CLAMPED at every denoising step
+    4. Final output preserves locked tokens exactly
+    
+    This enables precise, constraint-aware text editing.
+    """
+    
+    @torch.no_grad()
+    def edit(
+        self,
+        x_0: torch.Tensor,
+        lock_mask: torch.Tensor,
+        attention_mask: Optional[torch.Tensor] = None,
+        temperature: float = 1.0,
+        top_k: Optional[int] = None,
+        top_p: Optional[float] = None,
+        show_progress: bool = False,
+        callback: Optional[Callable[[int, torch.Tensor], None]] = None,
+    ) -> torch.Tensor:
+        """
+        Edit text while preserving locked tokens.
+        
+        Args:
+            x_0: Original token IDs [B, L]
+            lock_mask: Boolean mask [B, L] where True = LOCKED (preserve)
+            attention_mask: Optional padding mask [B, L]
+            temperature: Sampling temperature
+            top_k: Top-k sampling
+            top_p: Nucleus sampling
+            show_progress: Show progress bar
+            callback: Called at each step with (t, x_t)
+            
+        Returns:
+            Edited token IDs [B, L] with locked positions unchanged
+        """
+        device = x_0.device
+        batch_size, seq_len = x_0.shape
+        self.model.eval()
+        
+        # Store locked tokens
+        locked_tokens = x_0.clone()
+        
+        # Initialize x_T: locked tokens stay, editable tokens become [MASK]
+        x_t = x_0.clone()
+        edit_mask = ~lock_mask
+        x_t[edit_mask] = self.mask_token_id
+        
+        # Attention mask
+        if attention_mask is None:
+            attention_mask = torch.ones(batch_size, seq_len, dtype=torch.long, device=device)
+        
+        # Iteratively denoise
+        timesteps = list(range(self.num_timesteps, 0, -1))
+        
+        if show_progress:
+            from tqdm import tqdm
+            timesteps = tqdm(timesteps, desc="Editing")
+        
+        for t_val in timesteps:
+            t = torch.full((batch_size,), t_val, dtype=torch.long, device=device)
+            
+            # Get model prediction
+            logits = self.model(x_t, t, attention_mask)
+            
+            # Sample from logits
+            if temperature == 0:
+                x_0_pred = argmax_from_logits(logits)
+            else:
+                x_0_pred = sample_from_logits(
+                    logits,
+                    temperature=temperature,
+                    top_k=top_k,
+                    top_p=top_p,
+                )
+            
+            # Update x_t
+            if t_val > 1:
+                # Get target masking rate for t-1
+                gamma_next = self.schedule(torch.tensor(t_val - 1, device=device)).item()
+                
+                # Randomly re-mask some editable positions
+                random_mask = torch.rand(batch_size, seq_len, device=device) < gamma_next
+                random_mask = random_mask & edit_mask  # Only re-mask editable positions
+                
+                # Unmask with predictions, but may re-mask some
+                x_t = torch.where(random_mask, self.mask_token_id, x_0_pred)
+            else:
+                # Final step
+                x_t = x_0_pred
+            
+            # CRITICAL: Clamp locked tokens back to original values
+            x_t[lock_mask] = locked_tokens[lock_mask]
+            
+            # Callback for visualization
+            if callback is not None:
+                callback(t_val, x_t)
+        
+        # Final verification: locked tokens are preserved
+        assert torch.all(x_t[lock_mask] == locked_tokens[lock_mask]), \
+            "Locked tokens were modified!"
+        
+        return x_t
+    
+    @torch.no_grad()
+    def edit_with_trajectory(
+        self,
+        x_0: torch.Tensor,
+        lock_mask: torch.Tensor,
+        attention_mask: Optional[torch.Tensor] = None,
+        temperature: float = 1.0,
+        num_steps_to_save: int = 10,
+    ) -> Tuple[torch.Tensor, List[Tuple[int, torch.Tensor]]]:
+        """
+        Edit text and return intermediate states.
+        
+        Args:
+            x_0: Original tokens [B, L]
+            lock_mask: Lock mask [B, L]
+            attention_mask: Optional padding mask
+            temperature: Sampling temperature
+            num_steps_to_save: Number of intermediate steps to save
+            
+        Returns:
+            Tuple of (final tokens, trajectory)
+        """
+        trajectory = []
+        save_every = max(1, self.num_timesteps // num_steps_to_save)
+        
+        def save_callback(t: int, x_t: torch.Tensor):
+            if t % save_every == 0 or t == self.num_timesteps or t == 1:
+                trajectory.append((t, x_t.clone()))
+        
+        final = self.edit(
+            x_0=x_0,
+            lock_mask=lock_mask,
+            attention_mask=attention_mask,
+            temperature=temperature,
+            callback=save_callback,
+        )
+        
+        return final, trajectory
+    
+    def verify_constraints(
+        self,
+        original: torch.Tensor,
+        edited: torch.Tensor,
+        lock_mask: torch.Tensor,
+    ) -> Tuple[bool, float]:
+        """
+        Verify that locked tokens are preserved.
+        
+        Args:
+            original: Original tokens [B, L]
+            edited: Edited tokens [B, L]
+            lock_mask: Lock mask [B, L]
+            
+        Returns:
+            Tuple of (all_preserved, preservation_rate)
+        """
+        locked_original = original[lock_mask]
+        locked_edited = edited[lock_mask]
+        
+        matches = (locked_original == locked_edited).float()
+        preservation_rate = matches.mean().item() if matches.numel() > 0 else 1.0
+        all_preserved = preservation_rate == 1.0
+        
+        return all_preserved, preservation_rate
 
 
 class ConfidenceBasedSampler(DiffusionSampler):

@@ -9,6 +9,7 @@ from constrained_diffusion_lm.diffusion.schedule import (
 )
 from constrained_diffusion_lm.diffusion.sampler import (
     DiffusionSampler,
+    ConstrainedDiffusionSampler,
     ConfidenceBasedSampler,
 )
 
@@ -19,5 +20,6 @@ __all__ = [
     "SqrtSchedule",
     "get_schedule",
     "DiffusionSampler",
+    "ConstrainedDiffusionSampler",
     "ConfidenceBasedSampler",
 ]
