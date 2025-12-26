@@ -47,6 +47,9 @@ class NoiseSchedule:
         Returns:
             Masking probabilities gamma(t), same shape as input
         """
+        # Move gamma to same device as t if needed
+        if self._gamma.device != t.device:
+            self._gamma = self._gamma.to(t.device)
         return self._gamma[t]
     
     def sample_timesteps(self, batch_size: int, device: torch.device = None) -> torch.Tensor:
