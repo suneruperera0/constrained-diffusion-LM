@@ -1,4 +1,17 @@
 """Diffusion process: schedules, forward process, and sampling."""
 
-# Will be populated in Phase 2-4
+from constrained_diffusion_lm.diffusion.schedule import (
+    NoiseSchedule,
+    LinearSchedule,
+    CosineSchedule,
+    SqrtSchedule,
+    get_schedule,
+)
 
+__all__ = [
+    "NoiseSchedule",
+    "LinearSchedule",
+    "CosineSchedule",
+    "SqrtSchedule",
+    "get_schedule",
+]
