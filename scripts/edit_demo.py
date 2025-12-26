@@ -21,6 +21,10 @@ from constrained_diffusion_lm.data import Tokenizer
 from constrained_diffusion_lm.diffusion import get_schedule, ConstrainedDiffusionSampler
 from constrained_diffusion_lm.models import TransformerDenoiser
 from constrained_diffusion_lm.inference import edit_text, edit_text_with_trajectory
+from constrained_diffusion_lm.eval.edit_metrics import (
+    compute_edit_metrics,
+    compute_batch_metrics,
+)
 from constrained_diffusion_lm.utils.seed import set_seed, get_device
 from constrained_diffusion_lm.utils.logging import get_logger
 
@@ -118,15 +122,27 @@ def run_example(model, tokenizer, schedule, text, lock_text, device, temperature
     
     print(f"\n{visualize_edit(result.original_tokens, result.edited_tokens, result.lock_mask, tokenizer)}")
     print(f"\nOutput: \"{result.edited_text}\"")
+    
+    # Compute detailed metrics using eval module
+    import torch
+    metrics = compute_edit_metrics(
+        original_ids=torch.tensor(result.original_ids),
+        edited_ids=torch.tensor(result.edited_ids),
+        lock_mask=torch.tensor(result.lock_mask),
+    )
+    
     print(f"\n📊 Metrics:")
-    print(f"   Constraint preserved: {'✓ YES' if result.constraint_preserved else '✗ NO'}")
-    print(f"   Preservation rate:    {result.preservation_rate * 100:.1f}%")
+    print(f"   Constraint fidelity:  {metrics.constraint_fidelity * 100:.1f}%")
+    print(f"   Edit rate:            {metrics.edit_rate * 100:.1f}%")
+    print(f"   Drift:                {metrics.drift * 100:.1f}%")
+    print(f"   Locked tokens:        {metrics.num_locked_tokens}")
+    print(f"   Locked preserved:     {metrics.num_locked_preserved}/{metrics.num_locked_tokens}")
     
     # Show which tokens were locked
     locked_tokens = [result.original_tokens[i] for i in range(len(result.original_tokens)) if result.lock_mask[i]]
-    print(f"   Locked tokens:        {locked_tokens}")
+    print(f"   Locked text:          {locked_tokens}")
     
-    return result
+    return result, metrics
 
 
 def main():
@@ -190,32 +206,38 @@ def main():
         ]
         
         print(f"\n{'═' * 60}")
-        print("Running {len(examples)} predefined examples...")
+        print(f"Running {len(examples)} predefined examples...")
         print(f"{'═' * 60}")
         
-        all_preserved = True
+        all_metrics = []
         for i, ex in enumerate(examples, 1):
             print(f"\n[Example {i}/{len(examples)}]")
-            result = run_example(
+            result, metrics = run_example(
                 model, tokenizer, schedule,
                 ex["text"], ex["lock"],
                 device, args.temperature,
                 show_trajectory=args.show_trajectory,
             )
-            if not result.constraint_preserved:
-                all_preserved = False
+            all_metrics.append(metrics)
+        
+        # Compute batch metrics
+        batch_metrics = compute_batch_metrics(all_metrics)
         
         print(f"\n{'═' * 60}")
-        print("Summary")
+        print("Aggregate Evaluation Results")
         print(f"{'═' * 60}")
-        if all_preserved:
-            print("✓ All examples preserved locked tokens exactly!")
-        else:
-            print("✗ Some examples failed to preserve locked tokens")
+        print(batch_metrics.summary())
+        
+        # Copy-pasteable summary
+        print(f"\n{'─' * 60}")
+        print("Copy-pasteable summary:")
+        print(f"  Constraint Fidelity: {batch_metrics.mean_constraint_fidelity * 100:.1f}%")
+        print(f"  Perfect Rate: {batch_metrics.perfect_constraint_rate * 100:.0f}%")
+        print(f"  Zero Drift Rate: {batch_metrics.zero_drift_rate * 100:.0f}%")
             
     elif args.text and args.lock:
         # Run single example from command line
-        run_example(
+        result, metrics = run_example(
             model, tokenizer, schedule,
             args.text, args.lock,
             device, args.temperature,

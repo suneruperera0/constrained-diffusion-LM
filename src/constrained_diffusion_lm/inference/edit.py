@@ -32,6 +32,8 @@ class EditResult:
     lock_mask: torch.Tensor
     original_tokens: List[str]
     edited_tokens: List[str]
+    original_ids: List[int]  # Token IDs for metrics
+    edited_ids: List[int]    # Token IDs for metrics
     constraint_preserved: bool
     preservation_rate: float
 
@@ -121,7 +123,8 @@ def edit_text(
     # Decode
     edited_text = tokenizer.decode(edited_ids[0])
     original_tokens = [tokenizer.get_token(tid) for tid in token_ids]
-    edited_tokens = [tokenizer.get_token(tid) for tid in edited_ids[0].tolist()]
+    edited_token_list = edited_ids[0].tolist()
+    edited_tokens = [tokenizer.get_token(tid) for tid in edited_token_list]
     
     return EditResult(
         original_text=text,
@@ -130,6 +133,8 @@ def edit_text(
         lock_mask=lock_mask,
         original_tokens=original_tokens,
         edited_tokens=edited_tokens,
+        original_ids=token_ids,
+        edited_ids=edited_token_list,
         constraint_preserved=preserved,
         preservation_rate=rate,
     )
@@ -210,7 +215,8 @@ def edit_text_with_trajectory(
     # Decode
     edited_text = tokenizer.decode(edited_ids[0])
     original_tokens = [tokenizer.get_token(tid) for tid in token_ids]
-    edited_tokens = [tokenizer.get_token(tid) for tid in edited_ids[0].tolist()]
+    edited_token_list = edited_ids[0].tolist()
+    edited_tokens = [tokenizer.get_token(tid) for tid in edited_token_list]
     
     result = EditResult(
         original_text=text,
@@ -219,6 +225,8 @@ def edit_text_with_trajectory(
         lock_mask=lock_mask,
         original_tokens=original_tokens,
         edited_tokens=edited_tokens,
+        original_ids=token_ids,
+        edited_ids=edited_token_list,
         constraint_preserved=preserved,
         preservation_rate=rate,
     )
@@ -273,3 +281,120 @@ def batch_edit(
         results.append(result)
     
     return results
+
+
+@dataclass
+class ConditionalEditResult(EditResult):
+    """Result of a conditional (instruction-guided) edit."""
+    
+    instruction: str = ""
+    prompt_length: int = 0
+
+
+def conditional_edit(
+    model: TransformerDenoiser,
+    tokenizer: Tokenizer,
+    schedule: NoiseSchedule,
+    text: str,
+    instruction: str,
+    lock_substring_text: Optional[str] = None,
+    temperature: float = 1.0,
+    top_k: Optional[int] = None,
+    top_p: Optional[float] = None,
+    device: torch.device = None,
+    show_progress: bool = False,
+) -> ConditionalEditResult:
+    """
+    Edit text with an instruction prompt.
+    
+    The instruction is prepended to the input:
+    "[CLS] <instruction> [SEP] <text> [SEP]"
+    
+    The instruction is always locked (never masked), ensuring the model
+    always sees the full instruction when denoising.
+    
+    Args:
+        model: Trained TransformerDenoiser
+        tokenizer: Tokenizer
+        schedule: Noise schedule
+        text: Text to edit
+        instruction: Edit instruction (e.g., "Make this more formal")
+        lock_substring_text: Substring to lock in the text
+        temperature: Sampling temperature
+        top_k: Top-k sampling
+        top_p: Nucleus sampling
+        device: Device
+        show_progress: Show progress bar
+        
+    Returns:
+        ConditionalEditResult
+    """
+    from constrained_diffusion_lm.conditioning import PromptEncoder, create_prompted_input
+    
+    device = device or next(model.parameters()).device
+    
+    # Create prompted input
+    prompted = create_prompted_input(
+        tokenizer=tokenizer,
+        text=text,
+        instruction=instruction,
+        lock_substring=lock_substring_text,
+    )
+    
+    # Move to device
+    x_0 = prompted.input_ids.unsqueeze(0).to(device)
+    lock_mask_batch = prompted.full_lock_mask.unsqueeze(0).to(device)
+    
+    # Create sampler
+    sampler = ConstrainedDiffusionSampler(
+        model=model,
+        schedule=schedule,
+        mask_token_id=tokenizer.mask_token_id,
+        pad_token_id=tokenizer.pad_token_id,
+    )
+    
+    # Edit
+    edited_ids = sampler.edit(
+        x_0=x_0,
+        lock_mask=lock_mask_batch,
+        temperature=temperature,
+        top_k=top_k,
+        top_p=top_p,
+        show_progress=show_progress,
+    )
+    
+    # Verify constraints
+    preserved, rate = sampler.verify_constraints(x_0, edited_ids, lock_mask_batch)
+    
+    # Decode (strip prompt)
+    encoder = PromptEncoder(tokenizer)
+    edited_text = encoder.decode_output(edited_ids[0], prompted.prompt_length)
+    
+    # Get tokens for text portion only
+    text_start = prompted.prompt_length
+    original_text_ids = prompted.input_ids[text_start:].tolist()
+    edited_text_ids = edited_ids[0, text_start:].tolist()
+    
+    original_tokens = [tokenizer.get_token(tid) for tid in original_text_ids]
+    edited_tokens = [tokenizer.get_token(tid) for tid in edited_text_ids]
+    
+    # Get locked text
+    if lock_substring_text:
+        locked_text = lock_substring_text
+    else:
+        locked_text = ""
+    
+    return ConditionalEditResult(
+        original_text=text,
+        edited_text=edited_text,
+        locked_text=locked_text,
+        lock_mask=prompted.text_lock_mask,
+        original_tokens=original_tokens,
+        edited_tokens=edited_tokens,
+        original_ids=original_text_ids,
+        edited_ids=edited_text_ids,
+        constraint_preserved=preserved,
+        preservation_rate=rate,
+        instruction=instruction,
+        prompt_length=prompted.prompt_length,
+    )

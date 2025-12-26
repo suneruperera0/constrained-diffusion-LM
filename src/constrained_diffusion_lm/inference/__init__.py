@@ -9,7 +9,9 @@ from constrained_diffusion_lm.inference.edit import (
     edit_text,
     edit_text_with_trajectory,
     batch_edit,
+    conditional_edit,
     EditResult,
+    ConditionalEditResult,
 )
 
 __all__ = [
@@ -19,5 +21,7 @@ __all__ = [
     "edit_text",
     "edit_text_with_trajectory",
     "batch_edit",
+    "conditional_edit",
     "EditResult",
+    "ConditionalEditResult",
 ]
