@@ -156,23 +156,50 @@ def main():
     print("=" * 60)
     print(f"Device: {device}")
     
-    # Load tokenizer
-    tokenizer = Tokenizer("bert-base-uncased", max_length=args.max_len)
+    # Load checkpoint first to get model config
+    logger.info(f"Loading checkpoint: {args.checkpoint}")
+    checkpoint = torch.load(args.checkpoint, map_location=device, weights_only=False)
     
-    # Load model
+    # Infer model config from state dict if not saved
+    state_dict = checkpoint["model_state_dict"]
+    model_config = checkpoint.get("model_config", {})
+    
+    # Infer dim from token_embedding.weight shape: [vocab_size, dim]
+    dim = model_config.get("dim", state_dict["token_embedding.weight"].shape[1])
+    
+    # Infer max_seq_len from position_embedding.weight shape: [max_seq_len, dim]
+    max_seq_len = model_config.get("max_seq_len", state_dict["position_embedding.weight"].shape[0])
+    
+    # Infer num_layers by counting transformer.layers.X keys
+    layer_keys = [k for k in state_dict.keys() if k.startswith("transformer.layers.")]
+    layer_nums = set(int(k.split(".")[2]) for k in layer_keys)
+    num_layers = model_config.get("num_layers", max(layer_nums) + 1 if layer_nums else args.num_layers)
+    
+    # Infer dim_feedforward from transformer.layers.0.linear1.weight shape: [dim_ff, dim]
+    dim_feedforward = model_config.get("dim_feedforward", state_dict["transformer.layers.0.linear1.weight"].shape[0])
+    
+    # Infer num_heads from in_proj_weight shape: [3*dim, dim] -> dim // head_dim
+    # For TransformerEncoder, in_proj_weight is [3*dim, dim], so num_heads = dim // head_dim
+    # We can use the default or calculate from dim (common: dim / 64)
+    num_heads = model_config.get("num_heads", max(1, dim // 64))
+    
+    print(f"Inferred model config: dim={dim}, layers={num_layers}, heads={num_heads}, ff={dim_feedforward}, max_len={max_seq_len}")
+    
+    # Load tokenizer with correct max length
+    tokenizer = Tokenizer("bert-base-uncased", max_length=max_seq_len)
+    
+    # Create model with config from checkpoint
     model = TransformerDenoiser(
         vocab_size=tokenizer.vocab_size,
-        dim=args.model_dim,
-        num_layers=args.num_layers,
-        num_heads=args.num_heads,
-        dim_feedforward=args.model_dim * 2,
+        dim=dim,
+        num_layers=num_layers,
+        num_heads=num_heads,
+        dim_feedforward=dim_feedforward,
         dropout=0.0,
-        max_seq_len=args.max_len,
+        max_seq_len=max_seq_len,
         pad_token_id=tokenizer.pad_token_id,
     )
     
-    logger.info(f"Loading checkpoint: {args.checkpoint}")
-    checkpoint = torch.load(args.checkpoint, map_location=device, weights_only=False)
     model.load_state_dict(checkpoint["model_state_dict"])
     model = model.to(device)
     model.eval()
