@@ -7,6 +7,16 @@ from constrained_diffusion_lm.data.datasets import (
     collate_fn,
     create_dataloader,
 )
+from constrained_diffusion_lm.data.constraints import (
+    ConstraintSpec,
+    create_lock_mask,
+    create_edit_mask,
+    create_masks_from_spec,
+    find_substring_spans,
+    lock_substring,
+    visualize_constraints,
+    batch_create_masks,
+)
 
 __all__ = [
     "Tokenizer",
@@ -14,4 +24,12 @@ __all__ = [
     "InMemoryTextDataset",
     "collate_fn",
     "create_dataloader",
+    "ConstraintSpec",
+    "create_lock_mask",
+    "create_edit_mask",
+    "create_masks_from_spec",
+    "find_substring_spans",
+    "lock_substring",
+    "visualize_constraints",
+    "batch_create_masks",
 ]
