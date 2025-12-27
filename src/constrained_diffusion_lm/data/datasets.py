@@ -12,6 +12,79 @@ from torch.utils.data import Dataset, DataLoader
 from constrained_diffusion_lm.data.tokenization import Tokenizer
 
 
+class HuggingFaceDataset(Dataset):
+    """
+    Dataset that loads from HuggingFace datasets.
+    
+    Supports popular datasets like wikitext, openwebtext, etc.
+    """
+    
+    def __init__(
+        self,
+        dataset_name: str,
+        tokenizer: Tokenizer,
+        split: str = "train",
+        max_length: Optional[int] = None,
+        text_field: str = "text",
+        max_samples: Optional[int] = None,
+        config_name: Optional[str] = None,
+    ):
+        """
+        Initialize HuggingFace dataset.
+        
+        Args:
+            dataset_name: Name of dataset (e.g., "wikitext", "openwebtext")
+            tokenizer: Tokenizer instance
+            split: Dataset split ("train", "validation", "test")
+            max_length: Maximum sequence length
+            text_field: Field containing text
+            max_samples: Maximum number of samples to use (None = all)
+            config_name: Dataset config (e.g., "wikitext-2-raw-v1")
+        """
+        from datasets import load_dataset
+        
+        self.tokenizer = tokenizer
+        self.max_length = max_length or tokenizer.max_length
+        self.text_field = text_field
+        
+        # Load dataset
+        print(f"Loading {dataset_name} ({config_name or 'default'}) [{split}]...")
+        if config_name:
+            dataset = load_dataset(dataset_name, config_name, split=split)
+        else:
+            dataset = load_dataset(dataset_name, split=split)
+        
+        # Filter out empty texts and limit samples
+        self.texts = []
+        for item in dataset:
+            text = item[text_field].strip()
+            if text and len(text) > 20:  # Skip very short texts
+                self.texts.append(text)
+                if max_samples and len(self.texts) >= max_samples:
+                    break
+        
+        print(f"Loaded {len(self.texts)} samples")
+    
+    def __len__(self) -> int:
+        return len(self.texts)
+    
+    def __getitem__(self, idx: int) -> Dict[str, torch.Tensor]:
+        text = self.texts[idx]
+        
+        token_ids = self.tokenizer.encode(
+            text,
+            add_special_tokens=True,
+            truncation=True,
+            max_length=self.max_length,
+        )
+        
+        return {
+            "input_ids": torch.tensor(token_ids, dtype=torch.long),
+            "length": len(token_ids),
+            "text": text,
+        }
+
+
 class TextDataset(Dataset):
     """
     Simple text dataset for diffusion LM training.

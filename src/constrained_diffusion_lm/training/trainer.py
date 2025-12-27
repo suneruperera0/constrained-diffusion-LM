@@ -56,6 +56,7 @@ class Trainer:
         val_dataloader: Optional[DataLoader] = None,
         config: Optional[TrainingConfig] = None,
         device: torch.device = None,
+        model_config: Optional[Dict[str, Any]] = None,
     ):
         """
         Initialize trainer.
@@ -67,6 +68,7 @@ class Trainer:
             val_dataloader: Optional validation data loader
             config: Training configuration
             device: Device to train on
+            model_config: Model architecture config (saved in checkpoints)
         """
         self.model = model
         self.corruptor = corruptor
@@ -74,6 +76,7 @@ class Trainer:
         self.val_dataloader = val_dataloader
         self.config = config or TrainingConfig()
         self.device = device or torch.device("cpu")
+        self.model_config = model_config or {}
         
         # Move model to device
         self.model = self.model.to(self.device)
@@ -211,6 +214,7 @@ class Trainer:
             "global_step": self.global_step,
             "best_val_loss": self.best_val_loss,
             "config": self.config,
+            "model_config": self.model_config,  # Save model architecture info
         }, path)
         logger.info(f"Saved checkpoint to {path}")
     

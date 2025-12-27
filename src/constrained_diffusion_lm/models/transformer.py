@@ -219,3 +219,105 @@ class TransformerDenoiser(nn.Module):
     def get_num_trainable_params(self) -> int:
         """Count trainable parameters."""
         return sum(p.numel() for p in self.parameters() if p.requires_grad)
+    
+    @classmethod
+    def from_pretrained_bert(
+        cls,
+        bert_model_name: str = "bert-base-uncased",
+        max_seq_len: int = 256,
+        freeze_embeddings: bool = False,
+    ) -> "TransformerDenoiser":
+        """
+        Create a TransformerDenoiser initialized from BERT weights.
+        
+        This copies:
+        - Token embeddings
+        - Position embeddings  
+        - Transformer encoder layers
+        
+        The timestep embedding and output projection are randomly initialized.
+        
+        Args:
+            bert_model_name: HuggingFace BERT model name
+            max_seq_len: Maximum sequence length
+            freeze_embeddings: Whether to freeze embedding layers
+            
+        Returns:
+            TransformerDenoiser with BERT weights
+        """
+        from transformers import BertModel, BertConfig
+        
+        print(f"Loading BERT weights from {bert_model_name}...")
+        bert = BertModel.from_pretrained(bert_model_name)
+        config = bert.config
+        
+        # Create our model with matching dimensions
+        model = cls(
+            vocab_size=config.vocab_size,
+            dim=config.hidden_size,
+            num_layers=config.num_hidden_layers,
+            num_heads=config.num_attention_heads,
+            dim_feedforward=config.intermediate_size,
+            dropout=config.hidden_dropout_prob,
+            max_seq_len=max_seq_len,
+            pad_token_id=config.pad_token_id,
+        )
+        
+        # Copy token embeddings
+        model.token_embedding.weight.data.copy_(bert.embeddings.word_embeddings.weight.data)
+        
+        # Copy position embeddings (truncate or pad as needed)
+        bert_pos = bert.embeddings.position_embeddings.weight.data
+        our_max_len = model.position_embedding.weight.shape[0]
+        bert_max_len = bert_pos.shape[0]
+        copy_len = min(our_max_len, bert_max_len)
+        model.position_embedding.weight.data[:copy_len] = bert_pos[:copy_len]
+        
+        # Copy LayerNorm after embeddings
+        model.embed_norm.weight.data.copy_(bert.embeddings.LayerNorm.weight.data)
+        model.embed_norm.bias.data.copy_(bert.embeddings.LayerNorm.bias.data)
+        
+        # Copy transformer encoder layers
+        for i, bert_layer in enumerate(bert.encoder.layer):
+            our_layer = model.transformer.layers[i]
+            
+            # Self-attention weights
+            # BERT: separate Q, K, V projections -> PyTorch: combined in_proj
+            q_weight = bert_layer.attention.self.query.weight.data
+            k_weight = bert_layer.attention.self.key.weight.data
+            v_weight = bert_layer.attention.self.value.weight.data
+            our_layer.self_attn.in_proj_weight.data.copy_(torch.cat([q_weight, k_weight, v_weight], dim=0))
+            
+            q_bias = bert_layer.attention.self.query.bias.data
+            k_bias = bert_layer.attention.self.key.bias.data
+            v_bias = bert_layer.attention.self.value.bias.data
+            our_layer.self_attn.in_proj_bias.data.copy_(torch.cat([q_bias, k_bias, v_bias], dim=0))
+            
+            # Output projection
+            our_layer.self_attn.out_proj.weight.data.copy_(bert_layer.attention.output.dense.weight.data)
+            our_layer.self_attn.out_proj.bias.data.copy_(bert_layer.attention.output.dense.bias.data)
+            
+            # FFN
+            our_layer.linear1.weight.data.copy_(bert_layer.intermediate.dense.weight.data)
+            our_layer.linear1.bias.data.copy_(bert_layer.intermediate.dense.bias.data)
+            our_layer.linear2.weight.data.copy_(bert_layer.output.dense.weight.data)
+            our_layer.linear2.bias.data.copy_(bert_layer.output.dense.bias.data)
+            
+            # Layer norms (note: BERT is post-norm, we use pre-norm, but weights still transfer)
+            our_layer.norm1.weight.data.copy_(bert_layer.attention.output.LayerNorm.weight.data)
+            our_layer.norm1.bias.data.copy_(bert_layer.attention.output.LayerNorm.bias.data)
+            our_layer.norm2.weight.data.copy_(bert_layer.output.LayerNorm.weight.data)
+            our_layer.norm2.bias.data.copy_(bert_layer.output.LayerNorm.bias.data)
+        
+        # Optionally freeze embeddings
+        if freeze_embeddings:
+            model.token_embedding.weight.requires_grad = False
+            model.position_embedding.weight.requires_grad = False
+            model.embed_norm.weight.requires_grad = False
+            model.embed_norm.bias.requires_grad = False
+        
+        # Clean up BERT model
+        del bert
+        
+        print(f"Initialized TransformerDenoiser from BERT: {model.get_num_params():,} parameters")
+        return model

@@ -51,6 +51,37 @@ def parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
+def infer_model_config_from_state_dict(state_dict):
+    """Infer model architecture from saved state dict."""
+    # Get dim from token embedding
+    dim = state_dict["token_embedding.weight"].shape[1]
+    
+    # Get max_seq_len from position embedding
+    max_seq_len = state_dict["position_embedding.weight"].shape[0]
+    
+    # Count transformer layers
+    num_layers = 0
+    while f"transformer.layers.{num_layers}.self_attn.in_proj_weight" in state_dict:
+        num_layers += 1
+    
+    # Get num_heads from in_proj_weight shape (3 * dim * num_heads, dim)
+    in_proj_shape = state_dict["transformer.layers.0.self_attn.in_proj_weight"].shape
+    # in_proj_weight is (3*dim, dim), so num_heads = dim / head_dim
+    # For standard BERT, head_dim = 64, so num_heads = dim / 64
+    num_heads = dim // 64 if dim >= 64 else dim // 32
+    
+    # Get dim_feedforward from linear1
+    dim_feedforward = state_dict["transformer.layers.0.linear1.weight"].shape[0]
+    
+    return {
+        "dim": dim,
+        "num_layers": num_layers,
+        "num_heads": num_heads,
+        "dim_feedforward": dim_feedforward,
+        "max_seq_len": max_seq_len,
+    }
+
+
 def main():
     args = parse_args()
     
@@ -62,25 +93,38 @@ def main():
     device = get_device(args.device)
     logger.info(f"Using device: {device}")
     
+    # Load checkpoint first to infer model config
+    logger.info(f"Loading checkpoint: {args.checkpoint}")
+    checkpoint = torch.load(args.checkpoint, map_location=device, weights_only=False)
+    
+    # Try to get model config from checkpoint, otherwise infer from state dict
+    if "model_config" in checkpoint and checkpoint["model_config"]:
+        model_config = checkpoint["model_config"]
+        logger.info(f"Using saved model config: {model_config}")
+    else:
+        model_config = infer_model_config_from_state_dict(checkpoint["model_state_dict"])
+        logger.info(f"Inferred model config: {model_config}")
+    
+    # Override max_seq_len if user specified
+    max_seq_len = model_config.get("max_seq_len", 256)
+    
     # Load tokenizer
-    tokenizer = Tokenizer("bert-base-uncased", max_length=args.max_len)
+    tokenizer = Tokenizer("bert-base-uncased", max_length=max_seq_len)
     logger.info(f"Tokenizer loaded: vocab_size={tokenizer.vocab_size}")
     
-    # Create model (must match training config)
+    # Create model with correct architecture
     model = TransformerDenoiser(
         vocab_size=tokenizer.vocab_size,
-        dim=args.model_dim,
-        num_layers=args.num_layers,
-        num_heads=args.num_heads,
-        dim_feedforward=args.model_dim * 2,
+        dim=model_config["dim"],
+        num_layers=model_config["num_layers"],
+        num_heads=model_config["num_heads"],
+        dim_feedforward=model_config["dim_feedforward"],
         dropout=0.0,  # No dropout during inference
-        max_seq_len=args.max_len,
+        max_seq_len=max_seq_len,
         pad_token_id=tokenizer.pad_token_id,
     )
     
-    # Load checkpoint
-    logger.info(f"Loading checkpoint: {args.checkpoint}")
-    checkpoint = torch.load(args.checkpoint, map_location=device, weights_only=False)
+    # Load weights
     model.load_state_dict(checkpoint["model_state_dict"])
     model = model.to(device)
     model.eval()
@@ -93,6 +137,9 @@ def main():
     print("ConstrainedDiffusionLM Generation")
     print("=" * 60)
     
+    # Use user-specified length or default to something reasonable
+    seq_len = min(args.max_len, max_seq_len) if args.max_len else min(64, max_seq_len)
+    
     if args.show_process:
         # Show denoising trajectory for one sample
         print("\nGenerating with denoising visualization...\n")
@@ -101,7 +148,7 @@ def main():
             model=model,
             tokenizer=tokenizer,
             schedule=schedule,
-            seq_len=args.max_len,
+            seq_len=seq_len,
             temperature=args.temperature,
             device=device,
             num_steps_to_show=10,
@@ -120,7 +167,7 @@ def main():
         # Generate multiple samples
         print(f"\nGenerating {args.num_samples} samples...")
         print(f"Temperature: {args.temperature}")
-        print(f"Sequence length: {args.max_len}")
+        print(f"Sequence length: {seq_len}")
         print("-" * 60)
         
         texts = generate(
@@ -128,7 +175,7 @@ def main():
             tokenizer=tokenizer,
             schedule=schedule,
             num_samples=args.num_samples,
-            seq_len=args.max_len,
+            seq_len=seq_len,
             temperature=args.temperature,
             top_k=args.top_k,
             top_p=args.top_p,

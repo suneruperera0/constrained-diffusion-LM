@@ -18,6 +18,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
 import torch
 
 from constrained_diffusion_lm.data import Tokenizer, TextDataset, InMemoryTextDataset, create_dataloader
+from constrained_diffusion_lm.data.datasets import HuggingFaceDataset
 from constrained_diffusion_lm.data.corruption import MaskCorruptor
 from constrained_diffusion_lm.diffusion import get_schedule
 from constrained_diffusion_lm.models import TransformerDenoiser
@@ -41,6 +42,20 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--debug", action="store_true", help="Quick test with small model")
     parser.add_argument("--resume", type=str, default=None)
+    
+    # New: HuggingFace dataset options
+    parser.add_argument("--dataset", type=str, default=None,
+                        help="HuggingFace dataset name (e.g., 'wikitext', 'openwebtext')")
+    parser.add_argument("--dataset-config", type=str, default=None,
+                        help="Dataset config name (e.g., 'wikitext-2-raw-v1')")
+    parser.add_argument("--max-samples", type=int, default=None,
+                        help="Maximum number of training samples")
+    
+    # New: Pretrained initialization
+    parser.add_argument("--pretrained", type=str, default=None,
+                        help="Initialize from pretrained model (e.g., 'bert-base-uncased')")
+    parser.add_argument("--freeze-embeddings", action="store_true",
+                        help="Freeze token/position embeddings when using --pretrained")
 
     return parser.parse_args()
 
@@ -150,17 +165,52 @@ def main():
     train_path = data_config.get("train_path")
     val_path = data_config.get("val_path")
     
-    if train_path and Path(train_path).exists():
+    if args.dataset:
+        # Use HuggingFace dataset
+        logger.info(f"Loading HuggingFace dataset: {args.dataset}")
+        train_dataset = HuggingFaceDataset(
+            dataset_name=args.dataset,
+            tokenizer=tokenizer,
+            split="train",
+            max_length=max_seq_len,
+            max_samples=args.max_samples,
+            config_name=args.dataset_config,
+        )
+        # Try to load validation split
+        try:
+            val_dataset = HuggingFaceDataset(
+                dataset_name=args.dataset,
+                tokenizer=tokenizer,
+                split="validation",
+                max_length=max_seq_len,
+                max_samples=min(1000, args.max_samples or 1000),
+                config_name=args.dataset_config,
+            )
+        except Exception:
+            # Fall back to test split or subset of train
+            try:
+                val_dataset = HuggingFaceDataset(
+                    dataset_name=args.dataset,
+                    tokenizer=tokenizer,
+                    split="test",
+                    max_length=max_seq_len,
+                    max_samples=1000,
+                    config_name=args.dataset_config,
+                )
+            except Exception:
+                logger.warning("No validation split found, using sample texts")
+                val_dataset = InMemoryTextDataset(get_sample_texts()[:16], tokenizer)
+    elif train_path and Path(train_path).exists():
         logger.info(f"Loading training data from {train_path}")
         train_dataset = TextDataset(train_path, tokenizer)
+        if val_path and Path(val_path).exists():
+            val_dataset = TextDataset(val_path, tokenizer)
+        else:
+            val_texts = get_sample_texts()[:16]
+            val_dataset = InMemoryTextDataset(val_texts, tokenizer)
     else:
         logger.info("Using sample texts for training")
         train_dataset = InMemoryTextDataset(get_sample_texts(), tokenizer)
-    
-    if val_path and Path(val_path).exists():
-        val_dataset = TextDataset(val_path, tokenizer)
-    else:
-        # Use subset of training data for validation
         val_texts = get_sample_texts()[:16]
         val_dataset = InMemoryTextDataset(val_texts, tokenizer)
     
@@ -184,16 +234,33 @@ def main():
     logger.info(f"Diffusion: {diffusion_config['timesteps']} timesteps, {diffusion_config['schedule']} schedule")
     
     # Initialize model
-    model = TransformerDenoiser(
-        vocab_size=tokenizer.vocab_size,
-        dim=model_config.get("dim", 512),
-        num_layers=model_config.get("num_layers", 6),
-        num_heads=model_config.get("num_heads", 8),
-        dim_feedforward=model_config.get("dim_feedforward", 2048),
-        dropout=model_config.get("dropout", 0.1),
-        max_seq_len=model_config.get("max_seq_len", 256),
-        pad_token_id=tokenizer.pad_token_id,
-    )
+    if args.pretrained:
+        # Initialize from pretrained BERT
+        logger.info(f"Initializing from pretrained: {args.pretrained}")
+        model = TransformerDenoiser.from_pretrained_bert(
+            bert_model_name=args.pretrained,
+            max_seq_len=max_seq_len,
+            freeze_embeddings=args.freeze_embeddings,
+        )
+        # Update model_config to match pretrained
+        model_config = {
+            "dim": model.dim,
+            "num_layers": len(model.transformer.layers),
+            "num_heads": model.transformer.layers[0].self_attn.num_heads,
+            "dim_feedforward": model.transformer.layers[0].linear1.out_features,
+            "max_seq_len": max_seq_len,
+        }
+    else:
+        model = TransformerDenoiser(
+            vocab_size=tokenizer.vocab_size,
+            dim=model_config.get("dim", 512),
+            num_layers=model_config.get("num_layers", 6),
+            num_heads=model_config.get("num_heads", 8),
+            dim_feedforward=model_config.get("dim_feedforward", 2048),
+            dropout=model_config.get("dropout", 0.1),
+            max_seq_len=model_config.get("max_seq_len", 256),
+            pad_token_id=tokenizer.pad_token_id,
+        )
     logger.info(f"Model: {model.get_num_trainable_params():,} trainable parameters")
     
     # Initialize trainer
@@ -204,6 +271,7 @@ def main():
         val_dataloader=val_dataloader,
         config=training_config,
         device=device,
+        model_config=model_config,  # Save architecture info in checkpoints
     )
     
     # Resume from checkpoint if specified
