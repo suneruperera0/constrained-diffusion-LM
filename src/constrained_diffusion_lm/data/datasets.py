@@ -12,6 +12,30 @@ from torch.utils.data import Dataset, DataLoader
 from constrained_diffusion_lm.data.tokenization import Tokenizer
 
 
+def clean_wikitext(text: str) -> str:
+    """Clean WikiText formatting artifacts."""
+    import re
+    
+    # Skip section headers (lines starting with =)
+    if text.strip().startswith('='):
+        return ""
+    
+    # Remove @ - @ (hyphen encoding)
+    text = re.sub(r'\s*@\s*-\s*@\s*', '-', text)
+    # Remove @ . @ (period encoding)  
+    text = re.sub(r'\s*@\s*\.\s*@\s*', '.', text)
+    # Remove @ , @ (comma encoding)
+    text = re.sub(r'\s*@\s*,\s*@\s*', ',', text)
+    # Remove standalone @
+    text = re.sub(r'\s*@\s*', ' ', text)
+    # Remove = = headers
+    text = re.sub(r'=+', '', text)
+    # Clean up multiple spaces
+    text = re.sub(r'\s+', ' ', text)
+    
+    return text.strip()
+
+
 class HuggingFaceDataset(Dataset):
     """
     Dataset that loads from HuggingFace datasets.
@@ -28,6 +52,7 @@ class HuggingFaceDataset(Dataset):
         text_field: str = "text",
         max_samples: Optional[int] = None,
         config_name: Optional[str] = None,
+        clean_text: bool = True,
     ):
         """
         Initialize HuggingFace dataset.
@@ -40,12 +65,14 @@ class HuggingFaceDataset(Dataset):
             text_field: Field containing text
             max_samples: Maximum number of samples to use (None = all)
             config_name: Dataset config (e.g., "wikitext-2-raw-v1")
+            clean_text: Whether to clean WikiText formatting artifacts
         """
         from datasets import load_dataset
         
         self.tokenizer = tokenizer
         self.max_length = max_length or tokenizer.max_length
         self.text_field = text_field
+        self.clean_text = clean_text
         
         # Load dataset
         print(f"Loading {dataset_name} ({config_name or 'default'}) [{split}]...")
@@ -54,16 +81,25 @@ class HuggingFaceDataset(Dataset):
         else:
             dataset = load_dataset(dataset_name, split=split)
         
-        # Filter out empty texts and limit samples
+        # Filter and clean texts
         self.texts = []
+        skipped = 0
         for item in dataset:
             text = item[text_field].strip()
-            if text and len(text) > 20:  # Skip very short texts
+            
+            # Apply cleaning if enabled
+            if clean_text and 'wikitext' in dataset_name.lower():
+                text = clean_wikitext(text)
+            
+            # Skip empty or very short texts
+            if text and len(text) > 30:
                 self.texts.append(text)
                 if max_samples and len(self.texts) >= max_samples:
                     break
+            else:
+                skipped += 1
         
-        print(f"Loaded {len(self.texts)} samples")
+        print(f"Loaded {len(self.texts)} samples (skipped {skipped} short/empty)")
     
     def __len__(self) -> int:
         return len(self.texts)
