@@ -51,6 +51,7 @@ def parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
+#yo
 def infer_model_config_from_state_dict(state_dict):
     """Infer model architecture from saved state dict."""
     # Get dim from token embedding
