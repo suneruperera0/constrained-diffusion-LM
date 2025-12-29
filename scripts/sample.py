@@ -17,6 +17,7 @@ import torch
 
 from constrained_diffusion_lm.data import Tokenizer
 from constrained_diffusion_lm.diffusion import get_schedule, DiffusionSampler
+from constrained_diffusion_lm.diffusion.sampler import ImprovedDiffusionSampler
 from constrained_diffusion_lm.models import TransformerDenoiser
 from constrained_diffusion_lm.inference import generate, generate_with_visualization
 from constrained_diffusion_lm.utils.seed import set_seed, get_device
@@ -36,12 +37,17 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--max-len", type=int, default=32)
     parser.add_argument("--timesteps", type=int, default=100)
     parser.add_argument("--temperature", type=float, default=1.0)
-    parser.add_argument("--top-k", type=int, default=None)
-    parser.add_argument("--top-p", type=float, default=None)
+    parser.add_argument("--top-k", type=int, default=50)
+    parser.add_argument("--top-p", type=float, default=0.9)
     parser.add_argument("--device", type=str, default="auto")
     parser.add_argument("--seed", type=int, default=None)
     parser.add_argument("--show-process", action="store_true", help="Show denoising process")
     parser.add_argument("--confidence-sampling", action="store_true", help="Use confidence-based sampling")
+    
+    # New improved sampling options
+    parser.add_argument("--improved", action="store_true", help="Use improved sampler with confidence-based unmasking")
+    parser.add_argument("--repetition-penalty", type=float, default=1.2, help="Penalty for repeated tokens")
+    parser.add_argument("--no-annealing", action="store_true", help="Disable temperature annealing")
     
     # Model config (should match training)
     parser.add_argument("--model-dim", type=int, default=128)
@@ -169,21 +175,50 @@ def main():
         print(f"\nGenerating {args.num_samples} samples...")
         print(f"Temperature: {args.temperature}")
         print(f"Sequence length: {seq_len}")
-        print("-" * 60)
         
-        texts = generate(
-            model=model,
-            tokenizer=tokenizer,
-            schedule=schedule,
-            num_samples=args.num_samples,
-            seq_len=seq_len,
-            temperature=args.temperature,
-            top_k=args.top_k,
-            top_p=args.top_p,
-            device=device,
-            use_confidence_sampling=args.confidence_sampling,
-            show_progress=True,
-        )
+        if args.improved:
+            print(f"Using IMPROVED sampler (confidence-based, rep_penalty={args.repetition_penalty})")
+            print("-" * 60)
+            
+            # Use improved sampler directly
+            sampler = ImprovedDiffusionSampler(
+                model=model,
+                schedule=schedule,
+                mask_token_id=tokenizer.mask_token_id,
+                pad_token_id=tokenizer.pad_token_id,
+            )
+            
+            from tqdm import tqdm
+            all_texts = []
+            for _ in tqdm(range(args.num_samples), desc="Sampling"):
+                tokens = sampler.sample(
+                    batch_size=1,
+                    seq_len=seq_len,
+                    device=device,
+                    temperature=args.temperature,
+                    top_k=args.top_k,
+                    top_p=args.top_p,
+                    repetition_penalty=args.repetition_penalty,
+                    temperature_annealing=not args.no_annealing,
+                )
+                text = tokenizer.decode(tokens[0].tolist())
+                all_texts.append(text)
+            texts = all_texts
+        else:
+            print("-" * 60)
+            texts = generate(
+                model=model,
+                tokenizer=tokenizer,
+                schedule=schedule,
+                num_samples=args.num_samples,
+                seq_len=seq_len,
+                temperature=args.temperature,
+                top_k=args.top_k,
+                top_p=args.top_p,
+                device=device,
+                use_confidence_sampling=args.confidence_sampling,
+                show_progress=True,
+            )
         
         print("\nGenerated samples:")
         print("-" * 60)

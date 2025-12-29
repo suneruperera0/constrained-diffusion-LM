@@ -11,11 +11,46 @@ import torch.nn.functional as F
 from typing import Optional
 
 
+def apply_repetition_penalty(
+    logits: torch.Tensor,
+    generated_tokens: torch.Tensor,
+    penalty: float = 1.2,
+) -> torch.Tensor:
+    """
+    Apply repetition penalty to discourage repeated tokens.
+    
+    Args:
+        logits: Vocabulary logits [B, L, V]
+        generated_tokens: Previously generated tokens [B, L] 
+        penalty: Penalty factor (>1 = discourage repetition)
+        
+    Returns:
+        Modified logits [B, L, V]
+    """
+    if penalty == 1.0:
+        return logits
+    
+    batch_size, seq_len, vocab_size = logits.shape
+    
+    for b in range(batch_size):
+        # Get unique tokens that have been generated
+        unique_tokens = generated_tokens[b].unique()
+        
+        for token in unique_tokens:
+            if token >= 0 and token < vocab_size:
+                # Penalize this token across all positions
+                logits[b, :, token] = logits[b, :, token] / penalty
+    
+    return logits
+
+
 def sample_from_logits(
     logits: torch.Tensor,
     temperature: float = 1.0,
     top_k: Optional[int] = None,
     top_p: Optional[float] = None,
+    repetition_penalty: float = 1.0,
+    prev_tokens: Optional[torch.Tensor] = None,
 ) -> torch.Tensor:
     """
     Sample token IDs from logits.
@@ -25,10 +60,16 @@ def sample_from_logits(
         temperature: Sampling temperature (higher = more random)
         top_k: Keep only top-k tokens (None = disabled)
         top_p: Nucleus sampling threshold (None = disabled)
+        repetition_penalty: Penalty for repeating tokens (>1 = penalize)
+        prev_tokens: Previously generated tokens for repetition penalty
         
     Returns:
         Sampled token IDs [B, L]
     """
+    # Apply repetition penalty
+    if repetition_penalty != 1.0 and prev_tokens is not None:
+        logits = apply_repetition_penalty(logits, prev_tokens, repetition_penalty)
+    
     # Apply temperature
     if temperature != 1.0:
         logits = logits / temperature
@@ -61,6 +102,20 @@ def sample_from_logits(
     sampled = torch.multinomial(probs.view(-1, probs.size(-1)), num_samples=1)
     
     return sampled.view(logits.shape[:-1])
+
+
+def get_confidence_scores(logits: torch.Tensor) -> torch.Tensor:
+    """
+    Get confidence score (max probability) for each position.
+    
+    Args:
+        logits: Vocabulary logits [B, L, V]
+        
+    Returns:
+        Confidence scores [B, L]
+    """
+    probs = F.softmax(logits, dim=-1)
+    return probs.max(dim=-1).values
 
 
 def argmax_from_logits(logits: torch.Tensor) -> torch.Tensor:

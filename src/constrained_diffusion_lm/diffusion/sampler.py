@@ -450,3 +450,254 @@ class ConfidenceBasedSampler(DiffusionSampler):
             x_t = torch.where(is_masked, final_predictions, x_t)
         
         return x_t
+
+
+class ImprovedDiffusionSampler(DiffusionSampler):
+    """
+    Improved sampler with better generation quality.
+    
+    Improvements over base sampler:
+    1. Confidence-based unmasking (unmask most confident first)
+    2. Repetition penalty
+    3. Annealed temperature (start high, decrease over steps)
+    4. Low-confidence resampling
+    5. Entropy-based remasking (remask uncertain tokens)
+    """
+    
+    @torch.no_grad()
+    def sample(
+        self,
+        batch_size: int = 1,
+        seq_len: int = 64,
+        device: torch.device = None,
+        temperature: float = 1.0,
+        top_k: Optional[int] = 50,
+        top_p: Optional[float] = 0.9,
+        repetition_penalty: float = 1.2,
+        temperature_annealing: bool = True,
+        confidence_threshold: float = 0.3,
+        show_progress: bool = False,
+        callback: Optional[Callable[[int, torch.Tensor], None]] = None,
+    ) -> torch.Tensor:
+        """
+        Generate text with improved sampling strategies.
+        
+        Args:
+            batch_size: Number of samples
+            seq_len: Sequence length
+            device: Device
+            temperature: Base sampling temperature
+            top_k: Top-k filtering
+            top_p: Nucleus sampling
+            repetition_penalty: Penalty for repeated tokens (>1.0)
+            temperature_annealing: Whether to decrease temp over time
+            confidence_threshold: Resample tokens below this confidence
+            show_progress: Show progress
+            callback: Callback at each step
+            
+        Returns:
+            Generated token IDs [B, L]
+        """
+        from constrained_diffusion_lm.models.diffusion_head import (
+            sample_from_logits, argmax_from_logits, get_confidence_scores
+        )
+        
+        device = device or next(self.model.parameters()).device
+        self.model.eval()
+        
+        # Initialize fully masked
+        x_t = torch.full(
+            (batch_size, seq_len),
+            self.mask_token_id,
+            dtype=torch.long,
+            device=device,
+        )
+        
+        attention_mask = torch.ones(batch_size, seq_len, dtype=torch.long, device=device)
+        
+        # Track which positions are still masked
+        is_masked = torch.ones(batch_size, seq_len, dtype=torch.bool, device=device)
+        
+        timesteps = list(range(self.num_timesteps, 0, -1))
+        
+        if show_progress:
+            from tqdm import tqdm
+            timesteps = tqdm(timesteps, desc="Sampling")
+        
+        for step_idx, t_val in enumerate(timesteps):
+            t = torch.full((batch_size,), t_val, dtype=torch.long, device=device)
+            
+            # Annealed temperature: start high, end low
+            if temperature_annealing:
+                progress = step_idx / len(timesteps)
+                current_temp = temperature * (1.0 - 0.5 * progress)  # Decrease by 50%
+            else:
+                current_temp = temperature
+            
+            # Get model prediction
+            logits = self.model(x_t, t, attention_mask)
+            
+            # Get confidence scores
+            confidence = get_confidence_scores(logits)
+            
+            # Sample with repetition penalty
+            x_0_pred = sample_from_logits(
+                logits,
+                temperature=current_temp,
+                top_k=top_k,
+                top_p=top_p,
+                repetition_penalty=repetition_penalty,
+                prev_tokens=x_t,
+            )
+            
+            if t_val > 1:
+                # Calculate how many tokens to unmask this step
+                gamma_next = self.schedule(torch.tensor(t_val - 1, device=device)).item()
+                gamma_curr = self.schedule(torch.tensor(t_val, device=device)).item()
+                
+                # For each sample, unmask positions with highest confidence
+                for b in range(batch_size):
+                    masked_positions = is_masked[b].nonzero(as_tuple=True)[0]
+                    
+                    if len(masked_positions) == 0:
+                        continue
+                    
+                    # Get confidence at masked positions
+                    masked_conf = confidence[b, masked_positions]
+                    
+                    # Calculate how many to unmask
+                    current_masked_ratio = is_masked[b].float().mean().item()
+                    target_masked_ratio = gamma_next
+                    
+                    if current_masked_ratio > target_masked_ratio:
+                        num_to_unmask = int((current_masked_ratio - target_masked_ratio) * seq_len)
+                        num_to_unmask = max(1, min(num_to_unmask, len(masked_positions)))
+                        
+                        # Unmask highest confidence positions
+                        _, top_conf_indices = masked_conf.topk(num_to_unmask)
+                        positions_to_unmask = masked_positions[top_conf_indices]
+                        
+                        # Update tokens and mask
+                        x_t[b, positions_to_unmask] = x_0_pred[b, positions_to_unmask]
+                        is_masked[b, positions_to_unmask] = False
+                
+                # Low-confidence resampling: resample if confidence is too low
+                low_conf = (confidence < confidence_threshold) & (~is_masked)
+                if low_conf.any():
+                    # Re-mask low confidence tokens for resampling
+                    x_t[low_conf] = self.mask_token_id
+                    is_masked[low_conf] = True
+            else:
+                # Final step: fill in remaining masks
+                x_t = torch.where(is_masked, x_0_pred, x_t)
+            
+            if callback is not None:
+                callback(t_val, x_t)
+        
+        return x_t
+
+
+class ImprovedConstrainedSampler(ConstrainedDiffusionSampler):
+    """
+    Improved constraint-preserving sampler.
+    
+    Combines constraint enforcement with improved sampling strategies.
+    """
+    
+    @torch.no_grad()
+    def edit(
+        self,
+        x_0: torch.Tensor,
+        lock_mask: torch.Tensor,
+        attention_mask: Optional[torch.Tensor] = None,
+        temperature: float = 0.8,
+        top_k: Optional[int] = 50,
+        top_p: Optional[float] = 0.9,
+        repetition_penalty: float = 1.2,
+        show_progress: bool = False,
+        callback: Optional[Callable[[int, torch.Tensor], None]] = None,
+    ) -> torch.Tensor:
+        """
+        Edit with improved sampling.
+        """
+        from constrained_diffusion_lm.models.diffusion_head import (
+            sample_from_logits, argmax_from_logits, get_confidence_scores
+        )
+        
+        device = x_0.device
+        batch_size, seq_len = x_0.shape
+        self.model.eval()
+        
+        locked_tokens = x_0.clone()
+        edit_mask = ~lock_mask
+        
+        # Initialize: locked stays, editable becomes [MASK]
+        x_t = x_0.clone()
+        x_t[edit_mask] = self.mask_token_id
+        
+        if attention_mask is None:
+            attention_mask = torch.ones(batch_size, seq_len, dtype=torch.long, device=device)
+        
+        is_masked = edit_mask.clone()  # Only editable positions start masked
+        
+        timesteps = list(range(self.num_timesteps, 0, -1))
+        
+        if show_progress:
+            from tqdm import tqdm
+            timesteps = tqdm(timesteps, desc="Editing")
+        
+        for step_idx, t_val in enumerate(timesteps):
+            t = torch.full((batch_size,), t_val, dtype=torch.long, device=device)
+            
+            # Get model prediction
+            logits = self.model(x_t, t, attention_mask)
+            confidence = get_confidence_scores(logits)
+            
+            # Sample with improvements
+            x_0_pred = sample_from_logits(
+                logits,
+                temperature=temperature,
+                top_k=top_k,
+                top_p=top_p,
+                repetition_penalty=repetition_penalty,
+                prev_tokens=x_t,
+            )
+            
+            if t_val > 1:
+                gamma_next = self.schedule(torch.tensor(t_val - 1, device=device)).item()
+                
+                for b in range(batch_size):
+                    # Only consider editable masked positions
+                    editable_masked = is_masked[b] & edit_mask[b]
+                    masked_positions = editable_masked.nonzero(as_tuple=True)[0]
+                    
+                    if len(masked_positions) == 0:
+                        continue
+                    
+                    masked_conf = confidence[b, masked_positions]
+                    
+                    # Calculate unmask ratio for editable region only
+                    editable_count = edit_mask[b].sum().item()
+                    current_masked = editable_masked.sum().item()
+                    target_masked = int(gamma_next * editable_count)
+                    
+                    num_to_unmask = max(0, current_masked - target_masked)
+                    num_to_unmask = min(num_to_unmask, len(masked_positions))
+                    
+                    if num_to_unmask > 0:
+                        _, top_conf_indices = masked_conf.topk(num_to_unmask)
+                        positions_to_unmask = masked_positions[top_conf_indices]
+                        
+                        x_t[b, positions_to_unmask] = x_0_pred[b, positions_to_unmask]
+                        is_masked[b, positions_to_unmask] = False
+            else:
+                # Final step
+                x_t = torch.where(is_masked & edit_mask, x_0_pred, x_t)
+            
+            # CRITICAL: Always clamp locked tokens
+            x_t[lock_mask] = locked_tokens[lock_mask]
+            
+            if callback is not None:
+                callback(t_val, x_t)
+        
+        return x_t
