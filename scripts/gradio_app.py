@@ -245,132 +245,194 @@ def edit_text(
 
 
 def create_interface():
-    """Create the Gradio interface."""
+    """Create a clean, minimal chat-style Gradio interface."""
+    
+    custom_css = """
+    .gradio-container {
+        max-width: 700px !important;
+        margin: auto !important;
+        font-family: 'SF Pro Display', -apple-system, BlinkMacSystemFont, sans-serif !important;
+    }
+    
+    .main-container {
+        min-height: 80vh;
+        display: flex;
+        flex-direction: column;
+        justify-content: center;
+    }
+    
+    .title-text {
+        text-align: center;
+        font-size: 28px !important;
+        font-weight: 500 !important;
+        color: #1a1a1a;
+        margin-bottom: 40px !important;
+    }
+    
+    .chat-input-container {
+        border: 1px solid #e0e0e0 !important;
+        border-radius: 28px !important;
+        padding: 8px 16px !important;
+        background: white !important;
+        box-shadow: 0 2px 8px rgba(0,0,0,0.08) !important;
+    }
+    
+    .chat-input textarea {
+        border: none !important;
+        box-shadow: none !important;
+        font-size: 16px !important;
+    }
+    
+    .lock-input {
+        border-radius: 20px !important;
+        border: 1px solid #e0e0e0 !important;
+        margin-top: 12px !important;
+    }
+    
+    .generate-btn {
+        border-radius: 24px !important;
+        padding: 12px 32px !important;
+        font-size: 15px !important;
+        font-weight: 500 !important;
+        background: #1a1a1a !important;
+        color: white !important;
+        border: none !important;
+        margin-top: 16px !important;
+    }
+    
+    .generate-btn:hover {
+        background: #333 !important;
+    }
+    
+    .output-card {
+        background: #f8f9fa !important;
+        border-radius: 16px !important;
+        padding: 20px !important;
+        margin-top: 24px !important;
+        border: 1px solid #e8e8e8 !important;
+    }
+    
+    .output-text-display {
+        font-size: 17px !important;
+        line-height: 1.6 !important;
+        color: #1a1a1a !important;
+    }
+    
+    .metrics-row {
+        display: flex;
+        gap: 16px;
+        margin-top: 16px;
+    }
+    
+    .metric-badge {
+        background: white;
+        padding: 8px 16px;
+        border-radius: 20px;
+        font-size: 13px;
+        border: 1px solid #e0e0e0;
+    }
+    
+    .settings-accordion {
+        margin-top: 16px !important;
+    }
+    
+    .settings-accordion .label-wrap {
+        background: transparent !important;
+    }
+    """
     
     with gr.Blocks(
-        title="ConstrainedDiffusionLM",
-        theme=gr.themes.Soft(
-            primary_hue="indigo",
-            secondary_hue="blue",
+        title="Constrained Diffusion",
+        theme=gr.themes.Base(
+            font=["SF Pro Display", "-apple-system", "BlinkMacSystemFont", "sans-serif"],
+            primary_hue="neutral",
+            neutral_hue="gray",
         ),
-        css="""
-        .gradio-container { max-width: 900px !important; }
-        .output-text { font-size: 18px !important; }
-        """
+        css=custom_css
     ) as demo:
-        gr.Markdown("""
-        # 🔒 Constrained Diffusion Language Model
         
-        **Edit text while preserving locked spans exactly.**
-        
-        This demo shows constraint-preserving diffusion: locked tokens remain invariant 
-        across all denoising steps, while editable regions are regenerated.
-        """)
-        
-        with gr.Row():
-            with gr.Column(scale=1):
+        with gr.Column(elem_classes=["main-container"]):
+            # Title
+            gr.HTML("<h1 class='title-text'>Ready when you are.</h1>")
+            
+            # Main input area
+            with gr.Column():
                 input_text = gr.Textbox(
-                    label="📝 Input Text",
-                    placeholder="Enter the text you want to edit...",
-                    lines=3,
-                    value="The contract is governed by Ontario law and must be signed by both parties."
+                    placeholder="Enter text to edit...",
+                    lines=2,
+                    show_label=False,
+                    container=False,
+                    elem_classes=["chat-input"]
                 )
                 
                 locked_spans = gr.Textbox(
-                    label="🔒 Locked Spans (comma-separated)",
-                    placeholder="Ontario law, both parties",
-                    value="Ontario law",
-                    info="Text segments that must remain unchanged"
+                    placeholder="🔒 Lock these words (comma-separated)...",
+                    lines=1,
+                    show_label=False,
+                    container=False,
+                    elem_classes=["lock-input"]
                 )
                 
-                with gr.Row():
-                    diffusion_steps = gr.Slider(
-                        minimum=10,
-                        maximum=200,
-                        value=100,
-                        step=10,
-                        label="⏱️ Diffusion Steps",
-                        info="More steps = better quality, slower"
-                    )
+                # Settings accordion
+                with gr.Accordion("⚙️ Settings", open=False, elem_classes=["settings-accordion"]):
+                    with gr.Row():
+                        diffusion_steps = gr.Slider(
+                            minimum=10, maximum=200, value=100, step=10,
+                            label="Diffusion Steps"
+                        )
+                        temperature = gr.Slider(
+                            minimum=0.1, maximum=2.0, value=0.8, step=0.1,
+                            label="Temperature"
+                        )
                     
-                    temperature = gr.Slider(
-                        minimum=0.1,
-                        maximum=2.0,
-                        value=0.8,
-                        step=0.1,
-                        label="🌡️ Temperature",
-                        info="Higher = more random"
-                    )
-                
-                with gr.Row():
-                    top_k = gr.Slider(
-                        minimum=0,
-                        maximum=100,
-                        value=50,
-                        step=5,
-                        label="Top-K",
-                        info="0 = disabled"
-                    )
+                    with gr.Row():
+                        edit_strength = gr.Slider(
+                            minimum=0.1, maximum=1.0, value=0.4, step=0.1,
+                            label="Edit Strength",
+                            info="Lower = preserve more context"
+                        )
+                        repetition_penalty = gr.Slider(
+                            minimum=1.0, maximum=2.0, value=1.2, step=0.1,
+                            label="Repetition Penalty"
+                        )
                     
-                    top_p = gr.Slider(
-                        minimum=0.5,
-                        maximum=1.0,
-                        value=0.9,
-                        step=0.05,
-                        label="Top-P (Nucleus)",
-                        info="1.0 = disabled"
-                    )
+                    with gr.Row():
+                        top_k = gr.Slider(
+                            minimum=0, maximum=100, value=50, step=5,
+                            label="Top-K"
+                        )
+                        top_p = gr.Slider(
+                            minimum=0.5, maximum=1.0, value=0.9, step=0.05,
+                            label="Top-P"
+                        )
                 
-                repetition_penalty = gr.Slider(
-                    minimum=1.0,
-                    maximum=2.0,
-                    value=1.2,
-                    step=0.1,
-                    label="🔄 Repetition Penalty",
-                    info="Higher = less repetition"
+                generate_btn = gr.Button(
+                    "Generate →",
+                    variant="primary",
+                    elem_classes=["generate-btn"]
                 )
+            
+            # Output section
+            with gr.Column(visible=True, elem_classes=["output-card"]) as output_section:
+                gr.HTML("<div style='font-size: 12px; color: #666; margin-bottom: 8px;'>OUTPUT</div>")
                 
-                edit_strength = gr.Slider(
-                    minimum=0.1,
-                    maximum=1.0,
-                    value=0.5,
-                    step=0.1,
-                    label="✏️ Edit Strength",
-                    info="Lower = preserve more original text (recommended: 0.3-0.5)"
-                )
-                
-                generate_btn = gr.Button("🚀 Generate", variant="primary", size="lg")
-        
-        with gr.Row():
-            with gr.Column():
                 output_text = gr.Textbox(
-                    label="📤 Generated Text",
-                    lines=3,
-                    elem_classes=["output-text"]
+                    show_label=False,
+                    lines=2,
+                    container=False,
+                    elem_classes=["output-text-display"],
+                    interactive=False
                 )
                 
-                visualization = gr.HTML(
-                    label="🎨 Token Visualization"
-                )
+                gr.HTML("<div style='font-size: 12px; color: #666; margin: 16px 0 8px 0;'>VISUALIZATION</div>")
                 
-                constraint_report = gr.Markdown(
-                    label="📊 Constraint Report"
-                )
+                visualization = gr.HTML()
+                
+                gr.HTML("<div style='font-size: 12px; color: #666; margin: 16px 0 8px 0;'>METRICS</div>")
+                
+                constraint_report = gr.Markdown()
         
-        # Examples
-        gr.Examples(
-            examples=[
-                ["The contract is governed by Ontario law and must be signed by both parties.", "Ontario law", 100, 0.8],
-                ["Please review the document at your earliest convenience.", "review the document", 100, 0.7],
-                ["All disputes shall be resolved through arbitration.", "arbitration", 100, 0.9],
-                ["The deadline is March 15th for all submissions.", "March 15th", 100, 0.8],
-                ["Payment is due within thirty days of invoice date.", "thirty days", 100, 0.8],
-            ],
-            inputs=[input_text, locked_spans, diffusion_steps, temperature],
-            label="📚 Example Inputs"
-        )
-        
-        # Connect button
+        # Connect
         generate_btn.click(
             fn=edit_text,
             inputs=[
@@ -386,19 +448,21 @@ def create_interface():
             outputs=[output_text, constraint_report, visualization],
         )
         
-        gr.Markdown("""
-        ---
-        ### How It Works
-        
-        1. **Input** → Text is tokenized into subword tokens
-        2. **Lock** → Specified spans are marked as immutable  
-        3. **Mask** → Editable tokens are replaced with `[MASK]`
-        4. **Denoise** → Model iteratively predicts clean tokens
-        5. **Clamp** → Locked tokens are enforced at every step
-        6. **Output** → Final text with constraints preserved exactly
-        
-        *Built with 🧠 Transformer + 🎲 Diffusion + 🔒 Hard Constraints*
-        """)
+        # Also trigger on Enter key in input
+        input_text.submit(
+            fn=edit_text,
+            inputs=[
+                input_text,
+                locked_spans,
+                diffusion_steps,
+                temperature,
+                top_k,
+                top_p,
+                repetition_penalty,
+                edit_strength,
+            ],
+            outputs=[output_text, constraint_report, visualization],
+        )
     
     return demo
 
