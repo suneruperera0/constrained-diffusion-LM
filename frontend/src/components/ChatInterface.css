@@ -1,0 +1,171 @@
+.chat-container {
+  width: 100%;
+  max-width: 600px;
+  margin: 0 auto;
+}
+
+.chat-bar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  border: 1px solid #e0e0e0;
+  border-radius: 28px;
+  padding: 0 8px;
+  background: white;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.08);
+}
+
+.icon-btn {
+  background: transparent;
+  border: none;
+  padding: 8px;
+  cursor: pointer;
+  font-size: 20px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 40px;
+  height: 40px;
+  border-radius: 50%;
+  transition: background 0.2s;
+}
+
+.icon-btn:hover:not(:disabled) {
+  background: #f5f5f5;
+}
+
+.icon-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.chat-input {
+  flex: 1;
+  border: none;
+  outline: none;
+  font-size: 16px;
+  padding: 12px 8px;
+  resize: none;
+  font-family: inherit;
+  background: transparent;
+}
+
+.chat-input::placeholder {
+  color: #999;
+}
+
+.lock-input-wrapper {
+  margin-top: 12px;
+}
+
+.lock-input {
+  width: 100%;
+  border: 1px solid #e0e0e0;
+  border-radius: 20px;
+  padding: 10px 16px;
+  font-size: 14px;
+  outline: none;
+  transition: border-color 0.2s;
+}
+
+.lock-input:focus {
+  border-color: #1a1a1a;
+}
+
+.settings-panel {
+  margin-top: 16px;
+  padding: 20px;
+  background: white;
+  border-radius: 16px;
+  border: 1px solid #e8e8e8;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
+}
+
+.settings-row {
+  margin-bottom: 16px;
+}
+
+.settings-row:last-child {
+  margin-bottom: 0;
+}
+
+.settings-row label {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  font-size: 14px;
+  font-weight: 500;
+  color: #333;
+}
+
+.settings-row input[type="range"] {
+  flex: 1;
+}
+
+.settings-row span {
+  min-width: 50px;
+  text-align: right;
+  font-size: 14px;
+  color: #666;
+}
+
+.output-section {
+  margin-top: 24px;
+  padding: 20px;
+  background: #f8f9fa;
+  border-radius: 16px;
+  border: 1px solid #e8e8e8;
+}
+
+.output-header {
+  font-size: 12px;
+  color: #666;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  margin-bottom: 8px;
+  font-weight: 500;
+}
+
+.output-text {
+  font-size: 17px;
+  line-height: 1.6;
+  color: #1a1a1a;
+  margin-bottom: 20px;
+}
+
+.visualization {
+  margin-bottom: 20px;
+}
+
+.metrics {
+  display: flex;
+  gap: 24px;
+  flex-wrap: wrap;
+}
+
+.metric-item {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.metric-label {
+  font-size: 12px;
+  color: #666;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+.metric-value {
+  font-size: 18px;
+  font-weight: 600;
+  color: #1a1a1a;
+}
+
+.loading {
+  margin-top: 16px;
+  text-align: center;
+  color: #666;
+  font-size: 14px;
+}
+
