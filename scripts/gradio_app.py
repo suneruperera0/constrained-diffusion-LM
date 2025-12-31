@@ -248,133 +248,167 @@ def create_interface():
     """Create a clean, minimal chat-style Gradio interface."""
     
     custom_css = """
-    .gradio-container {
-        max-width: 700px !important;
-        margin: auto !important;
-        font-family: 'SF Pro Display', -apple-system, BlinkMacSystemFont, sans-serif !important;
+    body {
+        margin: 0;
+        padding: 0;
     }
     
-    .main-container {
-        min-height: 80vh;
+    .gradio-container {
+        max-width: 600px !important;
+        margin: auto !important;
+        font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif !important;
+    }
+    
+    .main-wrapper {
+        min-height: 100vh;
         display: flex;
         flex-direction: column;
         justify-content: center;
+        align-items: center;
+        padding: 20px;
     }
     
-    .title-text {
-        text-align: center;
-        font-size: 28px !important;
-        font-weight: 500 !important;
-        color: #1a1a1a;
-        margin-bottom: 40px !important;
+    .chat-bar-container {
+        width: 100%;
+        max-width: 600px;
+        position: relative;
     }
     
-    .chat-input-container {
+    .chat-input-wrapper {
         border: 1px solid #e0e0e0 !important;
         border-radius: 28px !important;
-        padding: 8px 16px !important;
+        padding: 0 8px !important;
         background: white !important;
         box-shadow: 0 2px 8px rgba(0,0,0,0.08) !important;
+        display: flex !important;
+        align-items: center !important;
+        gap: 8px !important;
     }
     
-    .chat-input textarea {
+    .chat-input-wrapper textarea {
         border: none !important;
         box-shadow: none !important;
         font-size: 16px !important;
+        padding: 12px 8px !important;
+        flex: 1 !important;
+        resize: none !important;
+        background: transparent !important;
     }
     
-    .lock-input {
+    .chat-input-wrapper textarea:focus {
+        outline: none !important;
+    }
+    
+    .settings-icon {
+        background: transparent !important;
+        border: none !important;
+        padding: 8px !important;
+        cursor: pointer !important;
+        color: #666 !important;
+        font-size: 20px !important;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        min-width: 40px;
+        height: 40px;
+        border-radius: 50%;
+    }
+    
+    .settings-icon:hover {
+        background: #f5f5f5 !important;
+    }
+    
+    .send-icon {
+        background: transparent !important;
+        border: none !important;
+        padding: 8px !important;
+        cursor: pointer !important;
+        color: #1a1a1a !important;
+        font-size: 18px !important;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        min-width: 40px;
+        height: 40px;
+        border-radius: 50%;
+    }
+    
+    .send-icon:hover {
+        background: #f5f5f5 !important;
+    }
+    
+    .lock-input-wrapper {
+        margin-top: 12px;
+    }
+    
+    .lock-input-wrapper input {
         border-radius: 20px !important;
         border: 1px solid #e0e0e0 !important;
+        padding: 10px 16px !important;
+        font-size: 14px !important;
+        width: 100% !important;
+    }
+    
+    .settings-accordion {
         margin-top: 12px !important;
     }
     
-    .generate-btn {
-        border-radius: 24px !important;
-        padding: 12px 32px !important;
-        font-size: 15px !important;
-        font-weight: 500 !important;
-        background: #1a1a1a !important;
-        color: white !important;
-        border: none !important;
-        margin-top: 16px !important;
+    .settings-accordion .wrap {
+        padding: 20px !important;
     }
     
-    .generate-btn:hover {
-        background: #333 !important;
-    }
-    
-    .output-card {
+    .output-section {
         background: #f8f9fa !important;
         border-radius: 16px !important;
         padding: 20px !important;
         margin-top: 24px !important;
         border: 1px solid #e8e8e8 !important;
+        width: 100%;
     }
     
-    .output-text-display {
+    .output-text {
         font-size: 17px !important;
         line-height: 1.6 !important;
         color: #1a1a1a !important;
-    }
-    
-    .metrics-row {
-        display: flex;
-        gap: 16px;
-        margin-top: 16px;
-    }
-    
-    .metric-badge {
-        background: white;
-        padding: 8px 16px;
-        border-radius: 20px;
-        font-size: 13px;
-        border: 1px solid #e0e0e0;
-    }
-    
-    .settings-accordion {
-        margin-top: 16px !important;
-    }
-    
-    .settings-accordion .label-wrap {
-        background: transparent !important;
     }
     """
     
     with gr.Blocks(
         title="Constrained Diffusion",
         theme=gr.themes.Base(
-            font=["SF Pro Display", "-apple-system", "BlinkMacSystemFont", "sans-serif"],
+            font=["-apple-system", "BlinkMacSystemFont", "sans-serif"],
             primary_hue="neutral",
             neutral_hue="gray",
         ),
         css=custom_css
     ) as demo:
         
-        with gr.Column(elem_classes=["main-container"]):
-            # Title
-            gr.HTML("<h1 class='title-text'>Ready when you are.</h1>")
-            
-            # Main input area
-            with gr.Column():
-                input_text = gr.Textbox(
-                    placeholder="Enter text to edit...",
-                    lines=2,
-                    show_label=False,
-                    container=False,
-                    elem_classes=["chat-input"]
-                )
+        with gr.Column(elem_classes=["main-wrapper"]):
+            with gr.Column(elem_classes=["chat-bar-container"]):
+                # Chat bar with icons
+                with gr.Row(elem_classes=["chat-input-wrapper"]):
+                    settings_btn = gr.Button("⚙️", elem_classes=["settings-icon"], scale=0, min_width=40)
+                    
+                    input_text = gr.Textbox(
+                        placeholder="Ask anything",
+                        lines=1,
+                        show_label=False,
+                        container=False,
+                        scale=9
+                    )
+                    
+                    send_btn = gr.Button("📤", elem_classes=["send-icon"], scale=0, min_width=40)
                 
                 locked_spans = gr.Textbox(
                     placeholder="🔒 Lock these words (comma-separated)...",
                     lines=1,
                     show_label=False,
                     container=False,
-                    elem_classes=["lock-input"]
+                    elem_classes=["lock-input-wrapper"]
                 )
                 
-                # Settings accordion
-                with gr.Accordion("⚙️ Settings", open=False, elem_classes=["settings-accordion"]):
+                # Settings accordion (toggled by settings icon)
+                with gr.Accordion("⚙️ Settings", open=False, elem_classes=["settings-accordion"]) as settings_accordion:
                     with gr.Row():
                         diffusion_steps = gr.Slider(
                             minimum=10, maximum=200, value=100, step=10,
@@ -405,22 +439,16 @@ def create_interface():
                             minimum=0.5, maximum=1.0, value=0.9, step=0.05,
                             label="Top-P"
                         )
-                
-                generate_btn = gr.Button(
-                    "Generate →",
-                    variant="primary",
-                    elem_classes=["generate-btn"]
-                )
             
             # Output section
-            with gr.Column(visible=True, elem_classes=["output-card"]) as output_section:
+            with gr.Column(elem_classes=["output-section"]) as output_section:
                 gr.HTML("<div style='font-size: 12px; color: #666; margin-bottom: 8px;'>OUTPUT</div>")
                 
                 output_text = gr.Textbox(
                     show_label=False,
                     lines=2,
                     container=False,
-                    elem_classes=["output-text-display"],
+                    elem_classes=["output-text"],
                     interactive=False
                 )
                 
@@ -432,8 +460,31 @@ def create_interface():
                 
                 constraint_report = gr.Markdown()
         
-        # Connect
-        generate_btn.click(
+        # JavaScript to toggle settings accordion when settings icon is clicked
+        gr.HTML("""
+        <script>
+        document.addEventListener('DOMContentLoaded', function() {
+            const settingsBtn = document.querySelector('.settings-icon button, .settings-icon');
+            const settingsAccordion = document.querySelector('[data-testid="settings-accordion"]') || 
+                                     document.querySelector('.settings-accordion') ||
+                                     document.querySelector('[id*="Settings"]');
+            
+            if (settingsBtn && settingsAccordion) {
+                settingsBtn.addEventListener('click', function(e) {
+                    e.preventDefault();
+                    e.stopPropagation();
+                    const label = settingsAccordion.querySelector('.label-wrap, .accordion-header');
+                    if (label) {
+                        label.click();
+                    }
+                });
+            }
+        });
+        </script>
+        """)
+        
+        # Connect generate events
+        send_btn.click(
             fn=edit_text,
             inputs=[
                 input_text,
@@ -448,7 +499,6 @@ def create_interface():
             outputs=[output_text, constraint_report, visualization],
         )
         
-        # Also trigger on Enter key in input
         input_text.submit(
             fn=edit_text,
             inputs=[
