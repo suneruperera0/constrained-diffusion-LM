@@ -87,6 +87,7 @@ def edit_text(
     top_k: int,
     top_p: float,
     repetition_penalty: float,
+    edit_strength: float = 1.0,
 ):
     """
     Edit text while preserving locked spans.
@@ -141,6 +142,26 @@ def edit_text(
     SCHEDULE = get_schedule("cosine", diffusion_steps)
     SAMPLER.schedule = SCHEDULE
     SAMPLER.num_timesteps = diffusion_steps
+    
+    # Apply partial masking based on edit_strength
+    # edit_strength=1.0 means mask all editable tokens (full regeneration)
+    # edit_strength=0.3 means only mask 30% of editable tokens (preserve more context)
+    edit_mask = ~lock_mask  # Positions that CAN be edited
+    
+    if edit_strength < 1.0:
+        # Randomly select which editable positions to actually mask
+        import random
+        editable_positions = edit_mask[0].nonzero(as_tuple=True)[0].tolist()
+        num_to_mask = max(1, int(len(editable_positions) * edit_strength))
+        positions_to_mask = random.sample(editable_positions, num_to_mask)
+        
+        # Create a new edit mask with only selected positions
+        partial_edit_mask = torch.zeros_like(edit_mask)
+        for pos in positions_to_mask:
+            partial_edit_mask[0, pos] = True
+        
+        # Update lock_mask to lock the positions we're NOT editing
+        lock_mask = ~partial_edit_mask
     
     # Run editing
     with torch.no_grad():
@@ -309,6 +330,15 @@ def create_interface():
                     info="Higher = less repetition"
                 )
                 
+                edit_strength = gr.Slider(
+                    minimum=0.1,
+                    maximum=1.0,
+                    value=0.5,
+                    step=0.1,
+                    label="✏️ Edit Strength",
+                    info="Lower = preserve more original text (recommended: 0.3-0.5)"
+                )
+                
                 generate_btn = gr.Button("🚀 Generate", variant="primary", size="lg")
         
         with gr.Row():
@@ -351,6 +381,7 @@ def create_interface():
                 top_k,
                 top_p,
                 repetition_penalty,
+                edit_strength,
             ],
             outputs=[output_text, constraint_report, visualization],
         )
