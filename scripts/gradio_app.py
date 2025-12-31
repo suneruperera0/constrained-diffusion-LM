@@ -127,10 +127,13 @@ def edit_text(
     if locked_spans.strip():
         for span in locked_spans.split(","):
             span = span.strip()
-            if span:
-                span_mask = lock_substring(x_0, span, TOKENIZER)
-                lock_mask = lock_mask | span_mask
-                if span_mask.any():
+            if span and span.lower() in input_text.lower():
+                # lock_substring returns (lock_mask, edit_mask, spans)
+                span_lock_mask, _, found_spans = lock_substring(input_text, span, TOKENIZER, seq_len=x_0.shape[1])
+                # Convert to tensor and move to device
+                span_lock_tensor = span_lock_mask.unsqueeze(0).to(DEVICE)
+                lock_mask = lock_mask | span_lock_tensor
+                if found_spans:
                     locked_texts.append(span)
     
     # Update schedule with requested steps
@@ -161,33 +164,34 @@ def edit_text(
     )
     
     # Create constraint report
-    constraint_status = "✅ PASSED" if metrics["constraint_fidelity"] == 1.0 else "❌ FAILED"
+    constraint_status = "✅ PASSED" if metrics.constraint_fidelity == 1.0 else "❌ FAILED"
     
     report = f"""
 ## Constraint Validation: {constraint_status}
 
 | Metric | Value |
 |--------|-------|
-| **Constraint Fidelity** | {metrics['constraint_fidelity']*100:.1f}% |
-| **Edit Rate** | {metrics['edit_rate']*100:.1f}% |
-| **Drift** | {metrics['drift']*100:.1f}% |
-| **Locked Tokens** | {metrics['num_locked']} |
-| **Locked Preserved** | {metrics['num_locked_preserved']}/{metrics['num_locked']} |
+| **Constraint Fidelity** | {metrics.constraint_fidelity*100:.1f}% |
+| **Edit Rate** | {metrics.edit_rate*100:.1f}% |
+| **Locked Tokens** | {metrics.num_locked_tokens} |
+| **Locked Preserved** | {metrics.num_locked_preserved}/{metrics.num_locked_tokens} |
 """
     
     if locked_texts:
         report += f"\n**Locked Spans:** {', '.join(f'`{t}`' for t in locked_texts)}"
     
     # Create visualization
-    original_tokens = TOKENIZER.tokenize(input_text)
-    edited_tokens = TOKENIZER.convert_ids_to_tokens(edited_ids[0].tolist())
+    # Access the underlying HuggingFace tokenizer for token conversion
+    hf_tokenizer = TOKENIZER.tokenizer
+    original_tokens = hf_tokenizer.convert_ids_to_tokens(x_0[0].tolist())
+    edited_tokens = hf_tokenizer.convert_ids_to_tokens(edited_ids[0].tolist())
     
     # Build colored visualization
     viz_parts = []
     lock_mask_list = lock_mask[0].tolist()
     
     for i, (orig, edit, locked) in enumerate(zip(
-        TOKENIZER.convert_ids_to_tokens(x_0[0].tolist()),
+        original_tokens,
         edited_tokens,
         lock_mask_list
     )):
