@@ -4,7 +4,8 @@ import './App.css'
 function App() {
   const [input, setInput] = useState('')
   const [lockedSpans, setLockedSpans] = useState('')
-  const [temperature, setTemperature] = useState(0.7)
+  const [temperature, setTemperature] = useState(0.8)
+  const [numSteps, setNumSteps] = useState(20)
   const [messages, setMessages] = useState([])
   const [loading, setLoading] = useState(false)
   const inputRef = useRef(null)
@@ -32,7 +33,8 @@ function App() {
         body: JSON.stringify({
           text: currentInput,
           locked_spans: locked,
-          temperature: temperature
+          temperature: temperature,
+          num_steps: numSteps
         })
       })
 
