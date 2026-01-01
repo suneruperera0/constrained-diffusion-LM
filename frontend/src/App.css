@@ -1,11 +1,288 @@
-.app {
-  width: 100%;
-  min-height: 100vh;
-  display: flex;
-  justify-content: center;
-  align-items: center;
-  padding: 20px;
-  background: #fafafa;
+* {
+  margin: 0;
+  padding: 0;
+  box-sizing: border-box;
 }
 
+body {
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, sans-serif;
+  background: #ffffff;
+  color: #0d0d0d;
+  -webkit-font-smoothing: antialiased;
+}
 
+.app {
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+}
+
+/* Main */
+.main {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  align-items: center;
+  padding: 16px;
+  max-width: 768px;
+  margin: 0 auto;
+  width: 100%;
+  min-height: 100vh;
+}
+
+.main.has-messages {
+  justify-content: flex-start;
+  padding-top: 24px;
+}
+
+/* Messages */
+.messages {
+  width: 100%;
+  flex: 1;
+  overflow-y: auto;
+  padding-bottom: 120px;
+}
+
+.message {
+  margin-bottom: 24px;
+}
+
+.message-bubble {
+  max-width: 100%;
+}
+
+.user-bubble {
+  background: #f5f5f5;
+  padding: 12px 16px;
+  border-radius: 24px;
+  display: inline-block;
+  max-width: 80%;
+  float: right;
+  clear: both;
+}
+
+.user-bubble p {
+  font-size: 16px;
+  line-height: 1.5;
+}
+
+.locked-indicator {
+  font-size: 12px;
+  color: #666;
+  margin-top: 8px;
+}
+
+.assistant-bubble {
+  display: flex;
+  gap: 12px;
+  clear: both;
+}
+
+.avatar {
+  width: 32px;
+  height: 32px;
+  border-radius: 50%;
+  background: #0d0d0d;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+}
+
+.avatar svg {
+  color: #fff;
+  width: 18px;
+  height: 18px;
+}
+
+.content {
+  flex: 1;
+}
+
+.content p {
+  font-size: 16px;
+  line-height: 1.6;
+}
+
+.content .highlight {
+  background: #e8f5e9;
+  padding: 2px 6px;
+  border-radius: 4px;
+  font-weight: 500;
+  color: #2e7d32;
+}
+
+.meta {
+  display: flex;
+  gap: 16px;
+  margin-top: 8px;
+  font-size: 13px;
+}
+
+.meta .success {
+  color: #2e7d32;
+}
+
+.meta .error {
+  color: #d32f2f;
+}
+
+.meta .stats {
+  color: #666;
+}
+
+.error-bubble {
+  background: #ffebee;
+  color: #c62828;
+  padding: 12px 16px;
+  border-radius: 12px;
+}
+
+/* Typing indicator */
+.typing {
+  display: flex;
+  gap: 4px;
+  padding: 8px 0;
+}
+
+.typing span {
+  width: 8px;
+  height: 8px;
+  background: #666;
+  border-radius: 50%;
+  animation: bounce 1.4s infinite ease-in-out both;
+}
+
+.typing span:nth-child(1) { animation-delay: -0.32s; }
+.typing span:nth-child(2) { animation-delay: -0.16s; }
+
+@keyframes bounce {
+  0%, 80%, 100% { transform: scale(0.8); opacity: 0.5; }
+  40% { transform: scale(1); opacity: 1; }
+}
+
+/* Input Container */
+.input-container {
+  width: 100%;
+  padding: 16px 0;
+}
+
+.has-messages .input-container {
+  position: fixed;
+  bottom: 0;
+  left: 0;
+  right: 0;
+  padding: 16px;
+  background: linear-gradient(transparent, #ffffff 20%);
+}
+
+.input-form {
+  max-width: 768px;
+  margin: 0 auto;
+}
+
+.input-wrapper {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  background: #f5f5f5;
+  border-radius: 28px;
+  padding: 8px 8px 8px 16px;
+  border: 1px solid #e5e5e5;
+  transition: border-color 0.15s, box-shadow 0.15s;
+}
+
+.input-wrapper:focus-within {
+  border-color: #0d0d0d;
+  box-shadow: 0 0 0 1px #0d0d0d;
+}
+
+.input-wrapper input {
+  flex: 1;
+  border: none;
+  background: none;
+  font-size: 16px;
+  outline: none;
+  color: #0d0d0d;
+}
+
+.input-wrapper input::placeholder {
+  color: #999;
+}
+
+.add-btn, .mic-btn {
+  width: 36px;
+  height: 36px;
+  border-radius: 50%;
+  border: none;
+  background: none;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: #666;
+  transition: background 0.15s, color 0.15s;
+}
+
+.add-btn:hover, .mic-btn:hover {
+  background: #e5e5e5;
+  color: #0d0d0d;
+}
+
+.send-btn {
+  width: 36px;
+  height: 36px;
+  border-radius: 50%;
+  border: none;
+  background: #e5e5e5;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: #999;
+  transition: all 0.15s;
+}
+
+.send-btn.active {
+  background: #0d0d0d;
+  color: #ffffff;
+}
+
+.send-btn:disabled {
+  cursor: not-allowed;
+}
+
+/* Locked Input */
+.locked-input-wrapper {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  background: #fafafa;
+  border-radius: 20px;
+  padding: 10px 16px;
+  margin-top: 12px;
+  border: 1px solid #e5e5e5;
+  transition: border-color 0.15s;
+}
+
+.locked-input-wrapper:focus-within {
+  border-color: #0d0d0d;
+}
+
+.lock-icon {
+  font-size: 14px;
+}
+
+.locked-input-wrapper input {
+  flex: 1;
+  border: none;
+  background: none;
+  font-size: 14px;
+  outline: none;
+  color: #0d0d0d;
+}
+
+.locked-input-wrapper input::placeholder {
+  color: #999;
+}

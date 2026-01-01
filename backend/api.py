@@ -1,282 +1,179 @@
-#!/usr/bin/env python3
 """
-FastAPI backend for Constrained Diffusion LM React frontend.
-Serves the React app and provides API endpoints for inference.
+FastAPI backend for Constrained Diffusion LM.
 """
 
 import sys
 from pathlib import Path
-
-# Add src to path
 sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
 
+from typing import List, Optional
+from contextlib import asynccontextmanager
+
 import torch
-import gradio as gr
 from fastapi import FastAPI, HTTPException
-from fastapi.staticfiles import StaticFiles
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse
 from pydantic import BaseModel
-from typing import Optional
-import json
 
-from constrained_diffusion_lm.data import Tokenizer
-from constrained_diffusion_lm.data.constraints import lock_substring
-from constrained_diffusion_lm.diffusion import get_schedule
-from constrained_diffusion_lm.diffusion.sampler import ImprovedConstrainedSampler
 from constrained_diffusion_lm.models import TransformerDenoiser
-from constrained_diffusion_lm.eval.edit_metrics import compute_edit_metrics
-from constrained_diffusion_lm.utils.seed import get_device
+from constrained_diffusion_lm.data import Tokenizer
+from constrained_diffusion_lm.diffusion import get_schedule
 
-# Global model components
-MODEL = None
-TOKENIZER = None
-SCHEDULE = None
-SAMPLER = None
-DEVICE = None
 
-# Request/Response models
+# Global model state
+model = None
+tokenizer = None
+device = None
+
+
 class EditRequest(BaseModel):
-    input_text: str
-    locked_spans: str = ""
-    diffusion_steps: int = 100
-    temperature: float = 0.8
-    top_k: int = 50
-    top_p: float = 0.9
-    repetition_penalty: float = 1.2
-    edit_strength: float = 0.4
+    text: str
+    locked_spans: List[str] = []
+    temperature: float = 0.7
+    num_steps: int = 50
+
 
 class EditResponse(BaseModel):
-    generated_text: str
-    visualization: str
-    metrics: dict
+    output: str
+    locked_preserved: bool
+    tokens_changed: int
+    tokens_total: int
 
-def load_model(checkpoint_path: str = "checkpoints/best_model.pt"):
-    """Load the model and initialize components."""
-    global MODEL, TOKENIZER, SCHEDULE, SAMPLER, DEVICE
-    
-    DEVICE = get_device("auto")
-    print(f"Using device: {DEVICE}")
-    
-    # Load checkpoint
-    checkpoint = torch.load(checkpoint_path, map_location=DEVICE, weights_only=False)
-    
-    # Infer model config
-    state_dict = checkpoint["model_state_dict"]
-    dim = state_dict["token_embedding.weight"].shape[1]
-    max_seq_len = state_dict["position_embedding.weight"].shape[0]
-    num_layers = sum(1 for k in state_dict if "transformer.layers" in k and "self_attn.in_proj_weight" in k)
-    num_heads = dim // 64 if dim >= 64 else dim // 32
-    dim_feedforward = state_dict["transformer.layers.0.linear1.weight"].shape[0]
-    
-    # Load tokenizer
-    TOKENIZER = Tokenizer("bert-base-uncased", max_length=max_seq_len)
-    
-    # Create model
-    MODEL = TransformerDenoiser(
-        vocab_size=TOKENIZER.vocab_size,
-        dim=dim,
-        num_layers=num_layers,
-        num_heads=num_heads,
-        dim_feedforward=dim_feedforward,
-        dropout=0.0,
-        max_seq_len=max_seq_len,
-        pad_token_id=TOKENIZER.pad_token_id,
-    )
-    MODEL.load_state_dict(state_dict)
-    MODEL = MODEL.to(DEVICE)
-    MODEL.eval()
-    
-    # Create schedule and sampler
-    SCHEDULE = get_schedule("cosine", 100)
-    SAMPLER = ImprovedConstrainedSampler(
-        model=MODEL,
-        schedule=SCHEDULE,
-        mask_token_id=TOKENIZER.mask_token_id,
-        pad_token_id=TOKENIZER.pad_token_id,
-    )
-    
-    print(f"Model loaded: {MODEL.get_num_params():,} parameters")
-    return True
 
-def edit_text_api(request: EditRequest) -> EditResponse:
-    """Edit text API endpoint logic."""
-    global MODEL, TOKENIZER, SAMPLER, DEVICE
+def load_model(checkpoint_path: Optional[str] = None):
+    """Load model from checkpoint or pretrained BERT."""
+    global model, tokenizer, device
     
-    if MODEL is None:
-        raise HTTPException(status_code=500, detail="Model not loaded")
+    device = torch.device("mps" if torch.backends.mps.is_available() else "cpu")
+    tokenizer = Tokenizer("bert-base-uncased")
     
-    if not request.input_text.strip():
-        raise HTTPException(status_code=400, detail="Input text cannot be empty")
-    
-    # Tokenize input
-    token_ids = TOKENIZER.encode(
-        request.input_text,
-        add_special_tokens=True,
-        truncation=True,
-        max_length=256,
-    )
-    x_0 = torch.tensor([token_ids], dtype=torch.long, device=DEVICE)
-    
-    # Create lock mask from locked spans
-    lock_mask = torch.zeros_like(x_0, dtype=torch.bool)
-    locked_texts = []
-    
-    if request.locked_spans.strip():
-        for span in request.locked_spans.split(","):
-            span = span.strip()
-            if span and span.lower() in request.input_text.lower():
-                span_lock_mask, _, found_spans = lock_substring(
-                    request.input_text, span, TOKENIZER, seq_len=x_0.shape[1]
-                )
-                span_lock_tensor = span_lock_mask.unsqueeze(0).to(DEVICE)
-                lock_mask = lock_mask | span_lock_tensor
-                if found_spans:
-                    locked_texts.append(span)
-    
-    # Update schedule
-    global SCHEDULE
-    SCHEDULE = get_schedule("cosine", request.diffusion_steps)
-    SAMPLER.schedule = SCHEDULE
-    SAMPLER.num_timesteps = request.diffusion_steps
-    
-    # Apply partial masking based on edit_strength
-    edit_mask = ~lock_mask
-    
-    if request.edit_strength < 1.0:
-        import random
-        editable_positions = edit_mask[0].nonzero(as_tuple=True)[0].tolist()
-        num_to_mask = max(1, int(len(editable_positions) * request.edit_strength))
-        positions_to_mask = random.sample(editable_positions, num_to_mask)
+    if checkpoint_path and Path(checkpoint_path).exists():
+        print(f"Loading checkpoint: {checkpoint_path}")
+        checkpoint = torch.load(checkpoint_path, map_location=device, weights_only=False)
         
-        partial_edit_mask = torch.zeros_like(edit_mask)
-        for pos in positions_to_mask:
-            partial_edit_mask[0, pos] = True
-        
-        lock_mask = ~partial_edit_mask
-    
-    # Run editing
-    with torch.no_grad():
-        edited_ids = SAMPLER.edit(
-            x_0=x_0,
-            lock_mask=lock_mask,
-            temperature=request.temperature,
-            top_k=request.top_k if request.top_k > 0 else None,
-            top_p=request.top_p if request.top_p < 1.0 else None,
-            repetition_penalty=request.repetition_penalty,
+        # Get model config
+        model_config = checkpoint.get("model_config", {})
+        model = TransformerDenoiser(
+            vocab_size=tokenizer.vocab_size,
+            dim=model_config.get("dim", 768),
+            num_heads=model_config.get("num_heads", 12),
+            num_layers=model_config.get("num_layers", 12),
+            dim_feedforward=model_config.get("dim_feedforward", 3072),
+            dropout=model_config.get("dropout", 0.1),
+            max_seq_len=model_config.get("max_seq_len", 256),
         )
+        model.load_state_dict(checkpoint["model_state_dict"])
+    else:
+        print("Loading pretrained BERT...")
+        model = TransformerDenoiser.from_pretrained_bert("bert-base-uncased")
     
-    # Decode output
-    generated_text = TOKENIZER.decode(edited_ids[0].tolist())
+    model = model.to(device)
+    model.eval()
+    print(f"Model loaded on {device}")
+
+
+def edit_text(text: str, locked_spans: List[str], temperature: float = 0.7) -> dict:
+    """Edit text while preserving locked spans."""
+    global model, tokenizer, device
     
-    # Compute metrics
-    metrics = compute_edit_metrics(
-        original_ids=x_0,
-        edited_ids=edited_ids,
-        lock_mask=lock_mask,
-    )
+    # Tokenize
+    encoded = tokenizer.encode(text, add_special_tokens=True)
+    x = torch.tensor([encoded], device=device)
+    tokens = tokenizer.tokenizer.convert_ids_to_tokens(encoded)
+    original_tokens = tokens.copy()
     
-    # Create visualization
-    hf_tokenizer = TOKENIZER.tokenizer
-    original_tokens = hf_tokenizer.convert_ids_to_tokens(x_0[0].tolist())
-    edited_tokens = hf_tokenizer.convert_ids_to_tokens(edited_ids[0].tolist())
+    # Create lock mask
+    lock = [False] * len(tokens)
+    lock[0] = lock[-1] = True  # [CLS] and [SEP]
     
-    viz_parts = []
-    lock_mask_list = lock_mask[0].tolist()
+    for span in locked_spans:
+        span_toks = tokenizer.tokenizer.convert_ids_to_tokens(
+            tokenizer.encode(span, add_special_tokens=False)
+        )
+        for i in range(len(tokens) - len(span_toks) + 1):
+            if tokens[i:i+len(span_toks)] == span_toks:
+                for j in range(len(span_toks)):
+                    lock[i+j] = True
     
-    for i, (orig, edit, locked) in enumerate(zip(
-        original_tokens,
-        edited_tokens,
-        lock_mask_list
-    )):
-        if orig in ["[CLS]", "[SEP]", "[PAD]"]:
-            continue
+    # Mask non-locked tokens
+    x_masked = x.clone()
+    editable_positions = []
+    for i, locked in enumerate(lock):
+        if not locked:
+            x_masked[0, i] = tokenizer.mask_token_id
+            editable_positions.append(i)
+    
+    # Predict
+    with torch.no_grad():
+        t = torch.tensor([0], device=device)
+        logits = model(x_masked, t, torch.ones_like(x_masked))
         
-        if locked:
-            viz_parts.append(
-                f'<span style="background-color: #90EE90; padding: 2px 4px; margin: 1px; border-radius: 3px;">{edit}</span>'
-            )
-        elif orig != edit:
-            viz_parts.append(
-                f'<span style="background-color: #FFB6C1; padding: 2px 4px; margin: 1px; border-radius: 3px;">{edit}</span>'
-            )
-        else:
-            viz_parts.append(
-                f'<span style="background-color: #FFFACD; padding: 2px 4px; margin: 1px; border-radius: 3px;">{edit}</span>'
-            )
+        result = x_masked.clone()
+        for i in editable_positions:
+            probs = torch.softmax(logits[0, i] / temperature, dim=-1)
+            result[0, i] = torch.multinomial(probs, 1)
     
-    visualization = f"""
-    <div style="font-family: monospace; line-height: 2; padding: 10px; background: #f5f5f5; border-radius: 8px;">
-    {' '.join(viz_parts)}
-    </div>
+    output_text = tokenizer.decode(result[0].tolist())
+    output_tokens = tokenizer.tokenizer.convert_ids_to_tokens(result[0].tolist())
     
-    <div style="margin-top: 10px; font-size: 12px;">
-    <span style="background-color: #90EE90; padding: 2px 6px; border-radius: 3px;">🔒 Locked</span>
-    <span style="background-color: #FFFACD; padding: 2px 6px; border-radius: 3px; margin-left: 8px;">📝 Unchanged</span>
-    <span style="background-color: #FFB6C1; padding: 2px 6px; border-radius: 3px; margin-left: 8px;">✏️ Changed</span>
-    </div>
-    """
+    # Check locked spans preserved
+    locked_preserved = all(span.lower() in output_text.lower() for span in locked_spans)
     
-    return EditResponse(
-        generated_text=generated_text,
-        visualization=visualization,
-        metrics={
-            "constraint_fidelity": metrics.constraint_fidelity,
-            "edit_rate": metrics.edit_rate,
-            "num_locked_tokens": metrics.num_locked_tokens,
-            "num_locked_preserved": metrics.num_locked_preserved,
-        }
-    )
+    # Count changed tokens
+    tokens_changed = sum(1 for i in editable_positions if output_tokens[i] != original_tokens[i])
+    
+    return {
+        "output": output_text,
+        "locked_preserved": locked_preserved,
+        "tokens_changed": tokens_changed,
+        "tokens_total": len(editable_positions),
+    }
 
-# Create FastAPI app
-app = FastAPI(title="Constrained Diffusion LM API")
 
-# CORS middleware
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    """Load model on startup."""
+    checkpoint = Path(__file__).parent.parent / "checkpoints" / "best_model.pt"
+    load_model(str(checkpoint) if checkpoint.exists() else None)
+    yield
+
+
+app = FastAPI(
+    title="Constrained Diffusion LM",
+    description="Text editing with constraint preservation",
+    lifespan=lifespan,
+)
+
+# CORS for React frontend
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=["http://localhost:5173", "http://localhost:3000"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
-# Mount static files (React build)
-frontend_build = Path(__file__).parent.parent / "frontend" / "dist"
-if frontend_build.exists():
-    app.mount("/static", StaticFiles(directory=str(frontend_build)), name="static")
 
-@app.on_event("startup")
-async def startup_event():
-    """Load model on startup."""
-    load_model()
+@app.get("/health")
+async def health():
+    return {"status": "ok", "model_loaded": model is not None}
 
-@app.get("/")
-async def root():
-    """Serve React app."""
-    index_path = frontend_build / "index.html"
-    if index_path.exists():
-        return FileResponse(str(index_path))
-    return {"message": "Frontend not built. Run 'npm run build' in frontend/ directory."}
 
-@app.post("/api/edit", response_model=EditResponse)
-async def edit_text_endpoint(request: EditRequest):
-    """Edit text endpoint."""
+@app.post("/edit", response_model=EditResponse)
+async def edit(request: EditRequest):
+    if model is None:
+        raise HTTPException(status_code=503, detail="Model not loaded")
+    
     try:
-        result = edit_text_api(request)
-        return result
+        result = edit_text(
+            text=request.text,
+            locked_spans=request.locked_spans,
+            temperature=request.temperature,
+        )
+        return EditResponse(**result)
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
-@app.get("/api/health")
-async def health():
-    """Health check endpoint."""
-    return {
-        "status": "ok",
-        "model_loaded": MODEL is not None
-    }
 
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run(app, host="0.0.0.0", port=8000)
-
-

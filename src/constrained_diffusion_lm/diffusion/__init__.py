@@ -11,6 +11,8 @@ from constrained_diffusion_lm.diffusion.sampler import (
     DiffusionSampler,
     ConstrainedDiffusionSampler,
     ConfidenceBasedSampler,
+    ImprovedDiffusionSampler,
+    ImprovedConstrainedSampler,
 )
 
 __all__ = [
@@ -22,4 +24,6 @@ __all__ = [
     "DiffusionSampler",
     "ConstrainedDiffusionSampler",
     "ConfidenceBasedSampler",
+    "ImprovedDiffusionSampler",
+    "ImprovedConstrainedSampler",
 ]
