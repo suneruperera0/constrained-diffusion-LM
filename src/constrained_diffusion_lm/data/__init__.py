@@ -4,8 +4,10 @@ from constrained_diffusion_lm.data.tokenization import Tokenizer
 from constrained_diffusion_lm.data.datasets import (
     TextDataset,
     InMemoryTextDataset,
+    HuggingFaceDataset,
     collate_fn,
     create_dataloader,
+    clean_wikitext,
 )
 from constrained_diffusion_lm.data.constraints import (
     ConstraintSpec,
@@ -22,8 +24,10 @@ __all__ = [
     "Tokenizer",
     "TextDataset",
     "InMemoryTextDataset",
+    "HuggingFaceDataset",
     "collate_fn",
     "create_dataloader",
+    "clean_wikitext",
     "ConstraintSpec",
     "create_lock_mask",
     "create_edit_mask",

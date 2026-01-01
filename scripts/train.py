@@ -263,7 +263,7 @@ def main():
         )
     logger.info(f"Model: {model.get_num_trainable_params():,} trainable parameters")
     
-    # Initialize trainer
+    # Initialize trainer with masked loss (aligns training with inference)
     trainer = Trainer(
         model=model,
         corruptor=corruptor,
@@ -272,6 +272,7 @@ def main():
         config=training_config,
         device=device,
         model_config=model_config,  # Save architecture info in checkpoints
+        use_masked_loss=True,  # Only compute loss on masked tokens
     )
     
     # Resume from checkpoint if specified

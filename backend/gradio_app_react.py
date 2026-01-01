@@ -224,27 +224,47 @@ def create_interface():
             """)
         return demo
     
-    # Read React HTML
-    react_html = react_build_path.read_text()
+    # Serve React app via iframe from a simple HTTP server
+    # We'll start a simple HTTP server on a different port for the React app
+    import http.server
+    import socketserver
+    import threading
+    import webbrowser
+    
+    dist_path = react_build_path.parent
+    react_port = 3000
+    
+    # Start simple HTTP server for React app in background
+    class ReactHandler(http.server.SimpleHTTPRequestHandler):
+        def __init__(self, *args, **kwargs):
+            super().__init__(*args, directory=str(dist_path), **kwargs)
+    
+    def start_react_server():
+        with socketserver.TCPServer(("", react_port), ReactHandler) as httpd:
+            httpd.serve_forever()
+    
+    server_thread = threading.Thread(target=start_react_server, daemon=True)
+    server_thread.start()
+    
+    # Store the edit function globally so JavaScript can access it
+    global edit_text_json_func
+    edit_text_json_func = edit_text_json
     
     with gr.Blocks() as demo:
-        # Embed React app
-        gr.HTML(value=react_html, elem_id="react-app")
-        
-        # Hidden API components - Gradio will auto-generate API endpoint
+        # Hidden API components
         with gr.Row(visible=False):
-            input_text_api = gr.Textbox()
-            locked_spans_api = gr.Textbox()
-            diffusion_steps_api = gr.Number(value=100)
-            temperature_api = gr.Number(value=0.8)
-            top_k_api = gr.Number(value=50)
-            top_p_api = gr.Number(value=0.9)
-            repetition_penalty_api = gr.Number(value=1.2)
-            edit_strength_api = gr.Number(value=0.4)
-            output_json_api = gr.Textbox()
+            input_text_api = gr.Textbox(elem_id="api_input_text")
+            locked_spans_api = gr.Textbox(elem_id="api_locked_spans")
+            diffusion_steps_api = gr.Number(value=100, elem_id="api_diffusion_steps")
+            temperature_api = gr.Number(value=0.8, elem_id="api_temperature")
+            top_k_api = gr.Number(value=50, elem_id="api_top_k")
+            top_p_api = gr.Number(value=0.9, elem_id="api_top_p")
+            repetition_penalty_api = gr.Number(value=1.2, elem_id="api_repetition_penalty")
+            edit_strength_api = gr.Number(value=0.4, elem_id="api_edit_strength")
+            output_json_api = gr.Textbox(elem_id="api_output_json")
         
-        # Connect function - this creates the API endpoint
-        api_btn = gr.Button("", visible=False)
+        # Connect function with button click
+        api_btn = gr.Button("", visible=False, elem_id="api_trigger_btn")
         api_btn.click(
             fn=edit_text_json,
             inputs=[
@@ -258,8 +278,91 @@ def create_interface():
                 edit_strength_api,
             ],
             outputs=[output_json_api],
-            api_name="edit_text_json"
         )
+        
+        # Create iframe HTML
+        iframe_html = f"""
+        <iframe 
+            src="http://localhost:{react_port}/index.html" 
+            style="width: 100%; height: 100vh; border: none;"
+            id="react-iframe"
+        ></iframe>
+        <script>
+            (function() {{
+                // Listen for messages from React app
+                window.addEventListener('message', async function(event) {{
+                    if (event.data.type === 'gradio-edit-request') {{
+                        const params = event.data.params;
+                        const iframe = document.getElementById('react-iframe');
+                        
+                        try {{
+                            // Use Gradio's API directly
+                            if (window.gradioApp) {{
+                                const iface = window.gradioApp.getInterfaceById(0);
+                                if (iface && iface.api) {{
+                                    // Get the button's fn_index
+                                    const btn = document.getElementById('api_trigger_btn');
+                                    if (btn) {{
+                                        // Set input values first
+                                        const inputText = document.getElementById('api_input_text');
+                                        const lockedSpans = document.getElementById('api_locked_spans');
+                                        const diffusionSteps = document.getElementById('api_diffusion_steps');
+                                        const temperature = document.getElementById('api_temperature');
+                                        const topK = document.getElementById('api_top_k');
+                                        const topP = document.getElementById('api_top_p');
+                                        const repPenalty = document.getElementById('api_repetition_penalty');
+                                        const editStrength = document.getElementById('api_edit_strength');
+                                        
+                                        if (inputText) {{
+                                            inputText.value = params[0];
+                                            inputText.dispatchEvent(new Event('input', {{ bubbles: true }}));
+                                        }}
+                                        if (lockedSpans) {{
+                                            lockedSpans.value = params[1];
+                                            lockedSpans.dispatchEvent(new Event('input', {{ bubbles: true }}));
+                                        }}
+                                        
+                                        // Click the button to trigger
+                                        btn.click();
+                                        
+                                        // Wait for output
+                                        const outputJson = document.getElementById('api_output_json');
+                                        let attempts = 0;
+                                        const checkOutput = setInterval(() => {{
+                                            attempts++;
+                                            if (outputJson && outputJson.value) {{
+                                                clearInterval(checkOutput);
+                                                const result = outputJson.value;
+                                                iframe.contentWindow.postMessage({{
+                                                    type: 'gradio-edit-response',
+                                                    data: {{ data: [result] }}
+                                                }}, '*');
+                                            }} else if (attempts > 300) {{
+                                                clearInterval(checkOutput);
+                                                iframe.contentWindow.postMessage({{
+                                                    type: 'gradio-edit-response',
+                                                    data: {{ error: 'Timeout waiting for response' }}
+                                                }}, '*');
+                                            }}
+                                        }}, 100);
+                                    }}
+                                }}
+                            }}
+                        }} catch (e) {{
+                            console.error('Error:', e);
+                            iframe.contentWindow.postMessage({{
+                                type: 'gradio-edit-response',
+                                data: {{ error: e.message }}
+                            }}, '*');
+                        }}
+                    }}
+                }});
+            }})();
+        </script>
+        """
+        
+        # Embed React app via iframe
+        gr.HTML(value=iframe_html, elem_id="react-app")
     
     return demo
 

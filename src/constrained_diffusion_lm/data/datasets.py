@@ -40,7 +40,12 @@ class HuggingFaceDataset(Dataset):
     """
     Dataset that loads from HuggingFace datasets.
     
-    Supports popular datasets like wikitext, openwebtext, etc.
+    Supports popular datasets like wikitext, openwebtext, ag_news, etc.
+    
+    Recommended datasets (ordered by quality for diffusion LM training):
+    1. "openwebtext" - Clean web text, no special config needed
+    2. "ag_news" - News articles, clean and well-structured  
+    3. "wikitext" with config "wikitext-103-raw-v1" - Needs cleaning
     """
     
     def __init__(
@@ -53,6 +58,7 @@ class HuggingFaceDataset(Dataset):
         max_samples: Optional[int] = None,
         config_name: Optional[str] = None,
         clean_text: bool = True,
+        min_length: int = 50,
     ):
         """
         Initialize HuggingFace dataset.
@@ -65,7 +71,8 @@ class HuggingFaceDataset(Dataset):
             text_field: Field containing text
             max_samples: Maximum number of samples to use (None = all)
             config_name: Dataset config (e.g., "wikitext-2-raw-v1")
-            clean_text: Whether to clean WikiText formatting artifacts
+            clean_text: Whether to clean text artifacts
+            min_length: Minimum text length to include (filters short texts)
         """
         from datasets import load_dataset
         
@@ -73,6 +80,7 @@ class HuggingFaceDataset(Dataset):
         self.max_length = max_length or tokenizer.max_length
         self.text_field = text_field
         self.clean_text = clean_text
+        self.min_length = min_length
         
         # Load dataset
         print(f"Loading {dataset_name} ({config_name or 'default'}) [{split}]...")
@@ -87,12 +95,16 @@ class HuggingFaceDataset(Dataset):
         for item in dataset:
             text = item[text_field].strip()
             
-            # Apply cleaning if enabled
-            if clean_text and 'wikitext' in dataset_name.lower():
-                text = clean_wikitext(text)
+            # Apply cleaning based on dataset
+            if clean_text:
+                if 'wikitext' in dataset_name.lower():
+                    text = clean_wikitext(text)
+                else:
+                    # Generic cleaning for other datasets
+                    text = self._clean_generic(text)
             
             # Skip empty or very short texts
-            if text and len(text) > 30:
+            if text and len(text) >= min_length:
                 self.texts.append(text)
                 if max_samples and len(self.texts) >= max_samples:
                     break
@@ -100,6 +112,15 @@ class HuggingFaceDataset(Dataset):
                 skipped += 1
         
         print(f"Loaded {len(self.texts)} samples (skipped {skipped} short/empty)")
+    
+    def _clean_generic(self, text: str) -> str:
+        """Generic text cleaning for any dataset."""
+        import re
+        # Remove excessive whitespace
+        text = re.sub(r'\s+', ' ', text)
+        # Remove control characters
+        text = re.sub(r'[\x00-\x1f\x7f-\x9f]', '', text)
+        return text.strip()
     
     def __len__(self) -> int:
         return len(self.texts)

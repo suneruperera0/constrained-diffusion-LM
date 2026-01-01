@@ -23,37 +23,55 @@ const ChatInterface = () => {
 
     setLoading(true)
     try {
-      // Call Gradio API endpoint
-      // Gradio auto-generates endpoint at /api/edit_text_json/
-      const response = await fetch('/api/edit_text_json/', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          data: [
-            inputText,
-            lockedSpans,
-            settings.diffusionSteps,
-            settings.temperature,
-            settings.topK,
-            settings.topP,
-            settings.repetitionPenalty,
-            settings.editStrength,
-          ]
-        }),
+      // Communicate with Gradio via postMessage (React is in iframe)
+      return new Promise((resolve, reject) => {
+        const params = [
+          inputText,
+          lockedSpans,
+          settings.diffusionSteps,
+          settings.temperature,
+          settings.topK,
+          settings.topP,
+          settings.repetitionPenalty,
+          settings.editStrength,
+        ]
+        
+        // Send request to parent window (Gradio)
+        window.parent.postMessage({
+          type: 'gradio-edit-request',
+          params: params
+        }, '*')
+        
+        // Listen for response
+        const handleMessage = (event) => {
+          if (event.data.type === 'gradio-edit-response') {
+            window.removeEventListener('message', handleMessage)
+            const result = event.data.data
+            // Gradio API returns { data: [...] }
+            const jsonStr = result.data[0]
+            const data = JSON.parse(jsonStr)
+            
+            setOutputText(data.generated_text || '')
+            setVisualization(data.visualization || '')
+            setMetrics(data.metrics || null)
+            setLoading(false)
+            resolve()
+          }
+        }
+        
+        window.addEventListener('message', handleMessage)
+        
+        // Timeout after 30 seconds
+        setTimeout(() => {
+          window.removeEventListener('message', handleMessage)
+          setLoading(false)
+          setOutputText('Error: Request timed out')
+          reject(new Error('Timeout'))
+        }, 30000)
       })
-      
-      const result = await response.json()
-      // Gradio API returns { data: [...] }
-      const jsonStr = result.data[0]
-      const data = JSON.parse(jsonStr)
-      
-      setOutputText(data.generated_text || '')
-      setVisualization(data.visualization || '')
-      setMetrics(data.metrics || null)
     } catch (error) {
       console.error('Error:', error)
       setOutputText('Error generating text. Please try again.')
-    } finally {
       setLoading(false)
     }
   }
