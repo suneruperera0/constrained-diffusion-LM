@@ -321,3 +321,26 @@ class TransformerDenoiser(nn.Module):
         
         print(f"Initialized TransformerDenoiser from BERT: {model.get_num_params():,} parameters")
         return model
+    
+    def freeze_backbone(self):
+        """
+        Freeze all BERT-inherited weights.
+        
+        Only trainable components after this:
+        - timestep_embedding (diffusion-specific)
+        - output_projection (maps to vocab)
+        - output_norm
+        
+        This preserves BERT's language knowledge while learning diffusion.
+        """
+        # Freeze embeddings
+        self.token_embedding.weight.requires_grad = False
+        self.position_embedding.weight.requires_grad = False
+        self.embed_norm.weight.requires_grad = False
+        self.embed_norm.bias.requires_grad = False
+        
+        # Freeze all transformer layers
+        for param in self.transformer.parameters():
+            param.requires_grad = False
+        
+        print(f"Froze backbone. Trainable params: {self.get_num_trainable_params():,} / {self.get_num_params():,}")

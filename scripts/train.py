@@ -56,6 +56,8 @@ def parse_args() -> argparse.Namespace:
                         help="Initialize from pretrained model (e.g., 'bert-base-uncased')")
     parser.add_argument("--freeze-embeddings", action="store_true",
                         help="Freeze token/position embeddings when using --pretrained")
+    parser.add_argument("--freeze-backbone", action="store_true",
+                        help="Freeze entire BERT backbone, only train timestep/output layers")
 
     return parser.parse_args()
 
@@ -242,6 +244,9 @@ def main():
             max_seq_len=max_seq_len,
             freeze_embeddings=args.freeze_embeddings,
         )
+        # Freeze entire backbone if requested (recommended for small datasets)
+        if args.freeze_backbone:
+            model.freeze_backbone()
         # Update model_config to match pretrained
         model_config = {
             "dim": model.dim,
