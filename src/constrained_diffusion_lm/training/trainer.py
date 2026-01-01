@@ -15,7 +15,11 @@ from torch.optim.lr_scheduler import CosineAnnealingLR
 from tqdm import tqdm
 
 from constrained_diffusion_lm.models import TransformerDenoiser
-from constrained_diffusion_lm.training.losses import DiffusionLoss, compute_accuracy
+from constrained_diffusion_lm.training.losses import (
+    DiffusionLoss, 
+    MaskedDiffusionLoss,
+    compute_accuracy,
+)
 from constrained_diffusion_lm.data.corruption import MaskCorruptor
 from constrained_diffusion_lm.utils.logging import get_logger
 
@@ -57,6 +61,7 @@ class Trainer:
         config: Optional[TrainingConfig] = None,
         device: torch.device = None,
         model_config: Optional[Dict[str, Any]] = None,
+        use_masked_loss: bool = True,
     ):
         """
         Initialize trainer.
@@ -69,6 +74,8 @@ class Trainer:
             config: Training configuration
             device: Device to train on
             model_config: Model architecture config (saved in checkpoints)
+            use_masked_loss: If True, only compute loss on masked tokens (recommended).
+                            This aligns training with inference where we only predict masked tokens.
         """
         self.model = model
         self.corruptor = corruptor
@@ -77,12 +84,18 @@ class Trainer:
         self.config = config or TrainingConfig()
         self.device = device or torch.device("cpu")
         self.model_config = model_config or {}
+        self.use_masked_loss = use_masked_loss
         
         # Move model to device
         self.model = self.model.to(self.device)
         
-        # Loss function
-        self.loss_fn = DiffusionLoss()
+        # Loss function - use MaskedDiffusionLoss for better alignment with inference
+        if use_masked_loss:
+            self.loss_fn = MaskedDiffusionLoss()
+            logger.info("Using MaskedDiffusionLoss (loss only on masked tokens)")
+        else:
+            self.loss_fn = DiffusionLoss()
+            logger.info("Using DiffusionLoss (loss on all tokens)")
         
         # Optimizer
         self.optimizer = AdamW(
@@ -133,8 +146,11 @@ class Trainer:
         # Forward pass
         logits = self.model(x_t, t, attention_mask)
         
-        # Compute loss
-        loss = self.loss_fn(logits, x_0, attention_mask)
+        # Compute loss - only on masked tokens if using MaskedDiffusionLoss
+        if self.use_masked_loss:
+            loss = self.loss_fn(logits, x_0, noise_mask, attention_mask)
+        else:
+            loss = self.loss_fn(logits, x_0, attention_mask)
         
         # Backward pass
         self.optimizer.zero_grad()
@@ -150,9 +166,12 @@ class Trainer:
         self.optimizer.step()
         self.scheduler.step()
         
-        # Compute accuracy
+        # Compute accuracy (on masked tokens to match loss)
         with torch.no_grad():
-            acc = compute_accuracy(logits, x_0, attention_mask)
+            if self.use_masked_loss:
+                acc = compute_accuracy(logits, x_0, noise_mask)
+            else:
+                acc = compute_accuracy(logits, x_0, attention_mask)
         
         return {
             "loss": loss.item(),
@@ -190,9 +209,13 @@ class Trainer:
             # Forward pass
             logits = self.model(x_t, t, attention_mask)
             
-            # Compute loss
-            loss = self.loss_fn(logits, x_0, attention_mask)
-            acc = compute_accuracy(logits, x_0, attention_mask)
+            # Compute loss - only on masked tokens if using MaskedDiffusionLoss
+            if self.use_masked_loss:
+                loss = self.loss_fn(logits, x_0, noise_mask, attention_mask)
+                acc = compute_accuracy(logits, x_0, noise_mask)
+            else:
+                loss = self.loss_fn(logits, x_0, attention_mask)
+                acc = compute_accuracy(logits, x_0, attention_mask)
             
             total_loss += loss.item()
             total_acc += acc.item()
