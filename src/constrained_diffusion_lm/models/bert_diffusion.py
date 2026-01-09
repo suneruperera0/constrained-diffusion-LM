@@ -123,51 +123,29 @@ class BertDiffusionLM(nn.Module):
     def forward(
         self,
         x_t: torch.Tensor,
-        t: torch.Tensor,
+        t: Optional[torch.Tensor] = None,  # Ignored - kept for API compatibility
         attention_mask: Optional[torch.Tensor] = None,
     ) -> torch.Tensor:
         """
         Forward pass: predict clean token logits from noisy input.
         
+        Uses BERT MLM directly without timestep conditioning for maximum accuracy.
+        
         Args:
             x_t: Noisy token IDs [B, L]
-            t: Timestep for each sample [B]
+            t: Timestep (ignored, kept for API compatibility)
             attention_mask: Optional mask [B, L]
             
         Returns:
             Logits over vocabulary [B, L, V]
         """
-        batch_size, seq_len = x_t.shape
-        
-        # Get BERT embeddings
-        embeddings = self.bert.bert.embeddings(x_t)  # [B, L, D]
-        
-        # Get timestep embedding and add to all positions
-        time_emb = self.timestep_embedding(t)  # [B, D]
-        time_emb = time_emb.unsqueeze(1).expand(-1, seq_len, -1)  # [B, L, D]
-        
-        # Combine: token embeddings + timestep embedding
-        embeddings = embeddings + time_emb
-        embeddings = self.time_norm(embeddings)
-        
-        # Extended attention mask for BERT
-        if attention_mask is None:
-            attention_mask = torch.ones(batch_size, seq_len, device=x_t.device)
-        
-        extended_mask = attention_mask[:, None, None, :]  # [B, 1, 1, L]
-        extended_mask = (1.0 - extended_mask) * -10000.0
-        
-        # Run through BERT encoder
-        encoder_output = self.bert.bert.encoder(
-            embeddings,
-            attention_mask=extended_mask,
+        # Use BERT MLM directly - no timestep conditioning needed
+        # BERT already handles different masking patterns well
+        outputs = self.bert(
+            input_ids=x_t,
+            attention_mask=attention_mask,
         )
-        hidden_states = encoder_output.last_hidden_state  # [B, L, D]
-        
-        # Run through MLM head to get logits
-        logits = self.bert.cls(hidden_states)  # [B, L, V]
-        
-        return logits
+        return outputs.logits
     
     def get_num_params(self) -> int:
         return sum(p.numel() for p in self.parameters())
@@ -207,4 +185,5 @@ def test_bert_diffusion():
 
 if __name__ == "__main__":
     test_bert_diffusion()
+
 
