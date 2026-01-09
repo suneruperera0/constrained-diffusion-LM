@@ -52,9 +52,18 @@ def load_model(checkpoint_path: Optional[str] = None):
     
     if checkpoint_path and Path(checkpoint_path).exists():
         print(f"Loading checkpoint: {checkpoint_path}")
-        model = BertDiffusionLM(freeze_bert=True)
         checkpoint = torch.load(checkpoint_path, map_location=device, weights_only=False)
-        model.load_state_dict(checkpoint["model_state_dict"])
+        # Get max_timesteps from checkpoint config
+        config = checkpoint.get("config", {})
+        max_timesteps = config.get("max_timesteps", 1000)
+        model = BertDiffusionLM(freeze_bert=True, max_timesteps=max_timesteps)
+        # Checkpoint only contains trainable parts (timestep_embedding, time_norm)
+        if "model_state_dict" in checkpoint:
+            model.load_state_dict(checkpoint["model_state_dict"], strict=False)
+        else:
+            # Load only the trainable components
+            model.timestep_embedding.load_state_dict(checkpoint["timestep_embedding"])
+            model.time_norm.load_state_dict(checkpoint["time_norm"])
     else:
         print("Using fresh BertDiffusionLM (pretrained BERT + untrained timestep embedding)")
         model = BertDiffusionLM(freeze_bert=True)
@@ -137,12 +146,8 @@ def edit_text(
             if not still_masked:
                 break
             
-            # Compute timestep (high to low)
-            t_val = int((1 - step / num_steps) * (schedule.num_timesteps - 1)) + 1
-            t = torch.tensor([t_val], device=device)
-            
-            # Get predictions
-            logits = model(x_t, t, attention_mask=torch.ones_like(x_t))
+            # Get predictions (no timestep needed - BERT MLM handles it directly)
+            logits = model(x_t, attention_mask=torch.ones_like(x_t))
             
             # Compute confidence for each masked position
             confidences = []
@@ -194,9 +199,10 @@ def edit_text(
 @asynccontextmanager
 async def lifespan(app):
     """Load model on startup."""
-    # Check for trained checkpoint
-    checkpoint = Path(__file__).parent.parent / "checkpoints" / "bert_diffusion_best.pt"
-    load_model(str(checkpoint) if checkpoint.exists() else None)
+    # Use untrained model (trained checkpoint made it worse)
+    # checkpoint = Path(__file__).parent.parent / "checkpoints" / "bert_diffusion.pt"
+    # load_model(str(checkpoint) if checkpoint.exists() else None)
+    load_model(None)  # Use fresh untrained timestep embedding
     yield
 
 
